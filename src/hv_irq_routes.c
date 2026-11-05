@@ -11,6 +11,8 @@
  */
 static const struct hv_irq_route routes[] = {
     {.hw_irq = 857, .vintid = 857, .level = true},
+    // T8122 / J613: dwc3_1 (usb@b02280000), AIC 1030 per t8122.dtsi. Inert on T8103.
+    {.hw_irq = 1030, .vintid = 1030, .level = true},
 };
 
 static struct hv_irq_route dynamic_routes[HV_IRQ_DYNAMIC_ROUTE_CAPACITY];

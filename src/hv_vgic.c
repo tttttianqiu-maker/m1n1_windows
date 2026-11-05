@@ -2401,37 +2401,37 @@ void hv_vgicv3_init(void)
             redist_base = REDIST_BASE_42_BIT;
             its_base = ITS_BASE_42_BIT;
             num_cpus = 10;
+            break;
         case T6002:
             dist_base = DIST_BASE_42_BIT;
             redist_base = REDIST_BASE_42_BIT;
             its_base = ITS_BASE_42_BIT;
             num_cpus = 20;
+            break;
         case T6020:
             dist_base = DIST_BASE_42_BIT;
             redist_base = REDIST_BASE_42_BIT;
             its_base = ITS_BASE_42_BIT;
             num_cpus = 10;
+            break;
         case T6021:
             dist_base = DIST_BASE_42_BIT;
             redist_base = REDIST_BASE_42_BIT;
             its_base = ITS_BASE_42_BIT;
             num_cpus = 12;
+            break;
         case T6022:
             dist_base = DIST_BASE_42_BIT;
             redist_base = REDIST_BASE_42_BIT;
             its_base = ITS_BASE_42_BIT;
             num_cpus = 24;
-        // case T6030:
-        // case T6031:
-        // case 0x6032:
-        // case T6034:
-        // case 0x6040:
-        // case 0x6041:
-        // case T8122:
-        //     dist_base = DIST_BASE_42_BIT;
-        //     redist_base = REDIST_BASE_42_BIT;
-        //     its_base = ITS_BASE_42_BIT;
-        //     break;
+            break;
+        case T8122: // M3 (base): 4 P-cores + 4 E-cores, AIC3, 42-bit PA
+            dist_base = DIST_BASE_42_BIT;
+            redist_base = REDIST_BASE_42_BIT;
+            its_base = ITS_BASE_42_BIT;
+            num_cpus = 8;
+            break;
     }
     //
     // Step 1 - distributor setup.
