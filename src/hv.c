@@ -636,9 +636,16 @@ static void hv_hcr_diag(u64 val, void *caller)
     hv_hcr_diag_count[cpu]++;
 
     bool gxf = supports_gxf();
-    u64 sprr = gxf ? mrs(SYS_IMP_APL_SPRR_CONFIG_EL1) : 0;
-    u64 gcfg = gxf ? mrs(SYS_IMP_APL_GXF_CONFIG_EL1) : 0;
-    u64 gsts = gxf ? mrs(SYS_IMP_APL_GXF_STATUS_EL1) : 0;
+    /*
+     * Read SPRR/GXF state whenever the core advertises GXF in AIDR, even if
+     * cpu_features is unknown (T8122 has no MIDR entry), EXP-20261105-011.
+     */
+    u64 aidr = mrs(AIDR_EL1);
+    bool hw_gxf = aidr & AIDR_EL1_GXF;
+    u64 sprr = hw_gxf ? mrs(SYS_IMP_APL_SPRR_CONFIG_EL1) : 0;
+    u64 gcfg = hw_gxf ? mrs(SYS_IMP_APL_GXF_CONFIG_EL1) : 0;
+    u64 gsts = hw_gxf ? mrs(SYS_IMP_APL_GXF_STATUS_EL1) : 0;
+    printf("HCRDIAG aidr=0x%lx hw_gxf=%d\n", aidr, hw_gxf);
     printf("HCRDIAG cpu=%d n=%u caller=%p val=0x%lx cur=0x%lx supports_gxf=%d "
            "sprr_cfg=0x%lx gxf_cfg=0x%lx gxf_sts=0x%lx gxf_en=%d in_gl=%d\n",
            cpu, hv_hcr_diag_count[cpu], caller, val, mrs(HCR_EL2), gxf, sprr, gcfg, gsts,
