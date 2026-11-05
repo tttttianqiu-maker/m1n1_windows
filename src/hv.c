@@ -611,8 +611,38 @@ void hv_pin_cpu(int cpu)
     hv_pinned_cpu = cpu;
 }
 
+#ifdef HV_HCR_DIAG
+/*
+ * EXP-20261105-008 diagnostic: on T8122 a later HCR_EL2 write from the vGIC
+ * path traps as EC 0 although the hv_init write succeeds. Log the GXF/SPRR
+ * state and caller for the first few calls per CPU, before the write.
+ */
+static u32 hv_hcr_diag_count[MAX_CPUS];
+
+static void hv_hcr_diag(u64 val, void *caller)
+{
+    int cpu = smp_id();
+
+    if (cpu < 0 || cpu >= MAX_CPUS || hv_hcr_diag_count[cpu] >= 4)
+        return;
+    hv_hcr_diag_count[cpu]++;
+
+    bool gxf = supports_gxf();
+    u64 sprr = gxf ? mrs(SYS_IMP_APL_SPRR_CONFIG_EL1) : 0;
+    u64 gcfg = gxf ? mrs(SYS_IMP_APL_GXF_CONFIG_EL1) : 0;
+    u64 gsts = gxf ? mrs(SYS_IMP_APL_GXF_STATUS_EL1) : 0;
+    printf("HCRDIAG cpu=%d n=%u caller=%p val=0x%lx cur=0x%lx supports_gxf=%d "
+           "sprr_cfg=0x%lx gxf_cfg=0x%lx gxf_sts=0x%lx gxf_en=%d in_gl=%d\n",
+           cpu, hv_hcr_diag_count[cpu], caller, val, mrs(HCR_EL2), gxf, sprr, gcfg, gsts,
+           gxf_enabled(), in_gl12());
+}
+#endif
+
 void hv_write_hcr(u64 val)
 {
+#ifdef HV_HCR_DIAG
+    hv_hcr_diag(val, __builtin_return_address(0));
+#endif
     /*
      * Callers can read the unguarded HCR bank and then ask this helper to
      * update VI/VF in the guarded GL2 bank. Guest idle is always trapped and

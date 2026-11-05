@@ -69,6 +69,9 @@ endif
 ifeq ($(APPLE_INPUT),0)
 CFG += HV_DISABLE_APPLE_INPUT
 endif
+ifeq ($(HCR_DIAG),1)
+CFG += HV_HCR_DIAG
+endif
 
 # Required for no_std + alloc for now
 export RUSTC_BOOTSTRAP=1
