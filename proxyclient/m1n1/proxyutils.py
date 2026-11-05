@@ -273,7 +273,13 @@ class ProxyUtils(Reloadable):
         if vstart is None:
             vstart = start
 
-        c = ARMAsm(".inst " + ",".join(str(i) for i in code), vstart)
+        try:
+            c = ARMAsm(".inst " + ",".join(str(i) for i in code), vstart)
+        except Exception:  # no host AArch64 toolchain: raw words, one per line
+            for i, w in enumerate(code):
+                addr = vstart + 4 * i
+                print(f"{' *' if addr == pc else '  '}{addr:x}: .inst {w:#010x}")
+            return
         lines = list()
         for line in c.disassemble():
             sl = line.split()

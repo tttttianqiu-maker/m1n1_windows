@@ -132,19 +132,8 @@ elif tba.revision == 3:
 
 print(f"Copying stub...")
 
-stub = asm.ARMAsm(f"""
-1:
-        ldp x4, x5, [x1], #16
-        stp x4, x5, [x2]
-        dc cvau, x2
-        ic ivau, x2
-        add x2, x2, #16
-        sub x3, x3, #16
-        cbnz x3, 1b
-
-        ldr x1, ={entry}
-        br x1
-""", image_addr + image_size)
+from m1n1.chainload_stub import ChainloadStub
+stub = ChainloadStub(entry, image_addr + image_size)
 
 iface.writemem(stub.addr, stub.data)
 p.dc_cvau(stub.addr, stub.len)

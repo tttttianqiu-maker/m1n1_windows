@@ -1086,8 +1086,11 @@ class HV(Reloadable):
             return self.handle_msr(ctx, ctx.afsr1)
 
         code = struct.unpack("<I", self.iface.readmem(ctx.elr_phys, 4))
-        c = ARMAsm(".inst " + ",".join(str(i) for i in code), ctx.elr_phys)
-        insn = "; ".join(c.disassemble())
+        try:
+            c = ARMAsm(".inst " + ",".join(str(i) for i in code), ctx.elr_phys)
+            insn = "; ".join(c.disassemble())
+        except Exception:  # no host AArch64 toolchain: report the raw word
+            insn = ".inst " + ",".join(f"{i:#010x}" for i in code)
 
         self.log(f"IMPDEF exception on: {insn}")
 
