@@ -247,7 +247,15 @@ bool hv_init(void)
     // Preserve the PMUv3 trap used by the established assisted path.
     printf("DEBUG: setting up HACR\n");
     uint64_t hacr_val = mrs(HACR_EL2);
-    hacr_val |= BIT(56);
+    /*
+     * BIT(56) is a J313-era IMPDEF trap that upstream m1n1 never sets. On T8122
+     * the first HCR_EL2 write after setting it traps as EC 0
+     * (EXP-20261105-007/008), so leave HACR untouched there.
+     */
+    if (chip_id != T8122)
+        hacr_val |= BIT(56);
+    else
+        printf("DEBUG: T8122: leaving HACR_EL2 bit 56 clear (hacr=0x%lx)\n", hacr_val);
     msr(HACR_EL2, hacr_val);
 
     //
