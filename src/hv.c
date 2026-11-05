@@ -659,7 +659,11 @@ void hv_write_hcr(u64 val)
     val = hv_wfx_apply_hcr(val);
     if (gxf_enabled() && !in_gl12())
         gl2_call(hv_write_hcr, val, 0, 0, 0);
-    else
+    else if (mrs(HCR_EL2) != val)
+        /*
+         * Skip no-op writes: on T8122 an identical HCR_EL2 write from the guest
+         * trap path raised EC 0 (EXP-20261105-008/009).
+         */
         msr(HCR_EL2, val);
 }
 
