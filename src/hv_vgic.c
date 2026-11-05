@@ -667,7 +667,7 @@ static bool handle_vgic_dist_access(struct exc_info *ctx, u64 addr, u64 *val, bo
 
                     const struct hv_irq_route *route = hv_irq_route_from_vintid(irq_num);
                     if (route) {
-                        if (route->hw_irq == 857) {
+                        if (route->vintid == 857) {
                             hv_prepare_j313_xhci_handoff();
                             hv_prepare_j313_xhci_darts();
                             j313_xhci_tick_trace_budget = 24;
@@ -677,7 +677,7 @@ static bool handle_vgic_dist_access(struct exc_info *ctx, u64 addr, u64 *val, bo
                         printf("HV: IRQ route enabled vINTID=%u AIC=%u\n", route->vintid,
                                route->hw_irq);
                         hv_vgic3_trace_intid(route->vintid, 48);
-                        if (route->hw_irq == 857)
+                        if (route->vintid == 857)
                             hv_trace_j313_xhci("route-enable");
                     }
                 }
@@ -2386,6 +2386,8 @@ void hv_vgicv3_init(void)
     // Also for now, we are catering to "lowest common denominator" for all chips,
     // so on more powerful systems we may not be using all cores.
     //
+    hv_irq_routes_select_t8122(chip_id == T8122);
+
     switch(chip_id) {
         case T8103:
         case T8112:

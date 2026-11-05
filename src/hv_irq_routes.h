@@ -29,5 +29,7 @@ bool hv_irq_route_resolve_incoming(u32 hw_irq, u32 reserved_vintid, u32 *vintid)
 bool hv_irq_route_level_eoi_target(u32 vintid, bool enabled, u32 *hw_irq);
 bool hv_irq_route_register(u32 hw_irq, u32 vintid, bool level);
 void hv_irq_routes_reset_dynamic(void);
+/* Pick the static route table for the SoC; T8103 (J313) is the default. */
+void hv_irq_routes_select_t8122(bool t8122);
 
 #endif

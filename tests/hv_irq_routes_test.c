@@ -64,5 +64,20 @@ int main(void)
     assert(hv_irq_route_from_hw(333) == NULL);
 
     puts("hv_irq_routes_test: ok");
+    /* T8122 (J613): physical AIC 1030 lands on the same guest INTID 857. */
+    hv_irq_routes_reset_dynamic();
+    hv_irq_routes_select_t8122(true);
+    assert(hv_irq_route_count() == 1);
+    route = hv_irq_route_from_hw(1030);
+    assert(route != NULL && route->vintid == 857 && route->level);
+    assert(hv_irq_route_from_vintid(857) == route);
+    assert(hv_irq_route_from_hw(857) == NULL);
+    assert(hv_irq_route_level_eoi_target(857, true, &hw_irq));
+    assert(hw_irq == 1030);
+    for (size_t i = 0; i < hv_irq_route_count(); i++)
+        assert(hv_irq_route_at(i)->vintid >= 32 && hv_irq_route_at(i)->vintid <= 1019);
+    hv_irq_routes_select_t8122(false);
+    assert(hv_irq_route_from_hw(1030) == NULL);
+
     return 0;
 }

@@ -2,18 +2,35 @@
 
 #include "hv_irq_routes.h"
 
-#define STATIC_ROUTE_COUNT (sizeof(routes) / sizeof(routes[0]))
-
 /*
  * Physical AIC numbers and guest GIC INTIDs are separate namespaces. Keep the
  * handoff explicit even when a route currently uses the same number in both.
- * usb-drd1 is the Type-C port not occupied by the m1n1 proxy on J313.
+ * Guest INTIDs must be GIC SPIs (32..1019); physical AIC numbers may be larger.
+ *
+ * usb-drd1 (the Type-C port not occupied by the m1n1 proxy) is guest INTID 857
+ * on every board, so the XHC1 ACPI node is the same for Windows on M1 and M3.
  */
-static const struct hv_irq_route routes[] = {
-    {.hw_irq = 857, .vintid = 857, .level = true},
-    // T8122 / J613: dwc3_1 (usb@b02280000), AIC 1030 per t8122.dtsi. Inert on T8103.
-    {.hw_irq = 1030, .vintid = 1030, .level = true},
+static const struct hv_irq_route routes_t8103[] = {
+    {.hw_irq = 857, .vintid = 857, .level = true},   // J313 usb-drd1
 };
+static const struct hv_irq_route routes_t8122[] = {
+    {.hw_irq = 1030, .vintid = 857, .level = true},  // J613 dwc3_1 (usb@b02280000), t8122.dtsi
+};
+
+static const struct hv_irq_route *routes = routes_t8103;
+static size_t static_route_count = sizeof(routes_t8103) / sizeof(routes_t8103[0]);
+#define STATIC_ROUTE_COUNT static_route_count
+
+void hv_irq_routes_select_t8122(bool t8122)
+{
+    if (t8122) {
+        routes = routes_t8122;
+        static_route_count = sizeof(routes_t8122) / sizeof(routes_t8122[0]);
+    } else {
+        routes = routes_t8103;
+        static_route_count = sizeof(routes_t8103) / sizeof(routes_t8103[0]);
+    }
+}
 
 static struct hv_irq_route dynamic_routes[HV_IRQ_DYNAMIC_ROUTE_CAPACITY];
 static size_t dynamic_route_count;
