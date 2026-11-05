@@ -44,11 +44,22 @@
 #include "types.h"
 #include "uartproxy.h"
 
-#define J313_XHCI1_BASE 0x502280000ULL
+/*
+ * Guest-owned Type-C xHCI (the port not used by the m1n1 proxy) and its DARTs.
+ * J313/T8103: usb-drd1 at 0x5_0228_0000. J613/T8122: dwc3_1 at 0xB_0228_0000
+ * (t8122.dtsi); the DARTs keep the same offsets from the controller.
+ * NOTE: T8122 USB DARTs are t8110-style, so the raw debug register dump below is
+ * only meaningful on T8103.
+ */
+static inline u64 hv_guest_xhci_complex_base(void)
+{
+    return chip_id == T8122 ? 0xb00000000ULL : 0x500000000ULL;
+}
+#define J313_XHCI1_BASE (hv_guest_xhci_complex_base() + 0x2280000ULL)
 #define J313_XHCI_LOW_DMA_END 0x40000000ULL
 #define J313_XHCI_DART_IOVA_END 0x100000000ULL
-#define J313_DART_USB1_0_BASE 0x502f00000ULL
-#define J313_DART_USB1_1_BASE 0x502f80000ULL
+#define J313_DART_USB1_0_BASE (hv_guest_xhci_complex_base() + 0x2f00000ULL)
+#define J313_DART_USB1_1_BASE (hv_guest_xhci_complex_base() + 0x2f80000ULL)
 
 static u32 j313_xhci_tick_trace_budget;
 static struct hv_xhci_dma_trace j313_xhci_dma_trace;
@@ -2462,7 +2473,7 @@ void hv_vgicv3_init(void)
     hv_map_hook(its_base, handle_vgic_its_access, 0x10000);
 
     //vGIC setup is complete.
-    if (chip_id == T8103)
+    if (chip_id == T8103 || chip_id == T8122)
         hv_vgic_rearm_j313_xhci_trace();
     vgic_inited = true;
     return;
