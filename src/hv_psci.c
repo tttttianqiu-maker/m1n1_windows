@@ -328,7 +328,7 @@ void hv_psci_init(void) {
     // from ADT/board id.
     //
 
-    const unsigned char *topology_tree;
+    const unsigned char *topology_tree = NULL;
 
     //
     // Get the platform's PSCI topology map.
@@ -338,6 +338,7 @@ void hv_psci_init(void) {
          topology_tree = apple_t8103_power_domain_tree_descriptor;
          break;
       case T8112:
+      case T8122: // M3: 4 E + 4 P, same shape as M2
          topology_tree = apple_t8112_power_domain_tree_descriptor;
          break;
       case T6000:
@@ -355,6 +356,9 @@ void hv_psci_init(void) {
       case T6021:
          topology_tree = apple_t6021_power_domain_tree_descriptor;
          break;
+      default:
+         printf("PSCI setup fatal error: no power domain topology for chip 0x%x\n", chip_id);
+         return;
     }
     printf("PSCI DEBUG: topology tree selected\n");
     psci_num_clusters = topology_tree[1];
@@ -397,6 +401,7 @@ void hv_psci_init(void) {
             cpu_start_off = CPU_START_OFF_T8103;
             break;
         case T8112:
+        case T8122: // matches smp.c
             cpu_start_off = CPU_START_OFF_T8112;
             break;
         case T6020:
