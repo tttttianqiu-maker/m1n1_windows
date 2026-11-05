@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 
 #include "hv.h"
+#include "hv_mtp.h"
 #include "hv_tick_policy.h"
 #include "hv_runtime_diag.h"
 #include "hv_wfx_policy.h"
@@ -261,6 +262,8 @@ bool hv_init(void)
 
     //
     hv_vgicv3_init();
+    /* T8122 only: boot the keyboard/trackpad coprocessor; harmless if it fails. */
+    hv_mtp_init();
     init_vgic_irq_queues();
     //
 #endif
@@ -1346,6 +1349,7 @@ static void hv_sample_pc(struct exc_info *ctx)
 void hv_tick(struct exc_info *ctx)
 {
     hv_wdt_pet();
+    hv_mtp_poll();
     struct hv_diag_sample_v1 diag_sample;
     if (hv_diag_tick(ctx, &diag_sample) && hv_runtime_diag_enabled())
         hv_diag_delivery_offer(&hv_diag_event_delivery, &diag_sample);
