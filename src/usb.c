@@ -8,6 +8,7 @@
 #include "malloc.h"
 #include "pmgr.h"
 #include "string.h"
+#include "spmi.h"
 #include "tps6598x.h"
 #include "types.h"
 #include "usb_dwc3.h"
@@ -480,18 +481,64 @@ void usb_i2c_restore_irqs(const char *i2c_path, bool force)
  * and every message (or exception) reaches the host log. Doing this at m1n1
  * boot reset the machine before USB came up (EXP-20261106-014/015).
  */
+#define USB_DIAG_STEP(...)                                                                         \
+    do {                                                                                           \
+        printf(__VA_ARGS__);                                                                       \
+        iodev_console_flush();                                                                     \
+        mdelay(100);                                                                               \
+    } while (0)
+
 void usb_guest_port_power_up(void)
 {
+    char bus_path[] = "/arm-io/nub-spmi-a0";
+    char hpm_path[40];
+
     if (!usb_has_spmi_hpm())
         return;
+    snprintf(hpm_path, sizeof(hpm_path), "%s/hpm%d", bus_path, USB_SPMI_GUEST_HPM);
 
-    printf("usb: waking guest-port controller hpm%d over SPMI\n", USB_SPMI_GUEST_HPM);
-    iodev_console_flush();
-    if (tps6598x_foreach_hpm(usb_spmi_hpm_match, usb_spmi_hpm_init_one, NULL, true) !=
-        HPM_FOREACH_MATCH)
-        printf("usb: no SPMI USB-C port controller for the guest port\n");
-    printf("usb: guest-port controller done\n");
-    iodev_console_flush();
+    /* EXP-20261106-017: one step at a time so the last line identifies a reset. */
+    int bus = adt_path_offset(adt, bus_path);
+    int hpm = adt_path_offset(adt, hpm_path);
+    u32 len = 0;
+    const u8 *reg = hpm >= 0 ? adt_getprop(adt, hpm, "reg", &len) : NULL;
+    s32 gen = -1;
+    if (bus >= 0)
+        ADT_GETPROP(adt, bus, "gen", &gen);
+    USB_DIAG_STEP("usbdiag 1 bus=%d hpm=%d compat_bus=%d/%d compat_hpm=%d gen=%d reg_len=%u "
+                  "reg=%02x %02x %02x %02x\n",
+                  bus, hpm, bus >= 0 && adt_is_compatible(adt, bus, "aapl,spmi"),
+                  bus >= 0 && adt_is_compatible(adt, bus, "spmi,gen3"),
+                  hpm >= 0 && adt_is_compatible(adt, hpm, "usbc,sn201202x,spmi"), gen, len,
+                  reg && len > 0 ? reg[0] : 0xff, reg && len > 1 ? reg[1] : 0xff,
+                  reg && len > 2 ? reg[2] : 0xff, reg && len > 3 ? reg[3] : 0xff);
+    if (bus < 0 || hpm < 0 || !reg)
+        return;
+
+    u64 base = 0;
+    int bus_path_trace[8];
+    adt_path_offset_trace(adt, bus_path, bus_path_trace);
+    adt_get_reg(adt, bus_path_trace, "reg", 0, &base, NULL);
+    USB_DIAG_STEP("usbdiag 2 spmi base=0x%lx\n", base);
+    if (!base)
+        return;
+
+    USB_DIAG_STEP("usbdiag 3 status=0x%x\n", read32(base));
+
+    spmi_dev_t *spmi = spmi_init(bus_path);
+    USB_DIAG_STEP("usbdiag 4 spmi_init=%p\n", spmi);
+    if (!spmi)
+        return;
+
+    USB_DIAG_STEP("usbdiag 5 sending WAKEUP to addr %u\n", reg[0]);
+    tps6598x_dev_t *tps = tps6598x_init_spmi(hpm_path, spmi);
+    USB_DIAG_STEP("usbdiag 6 wakeup done tps=%p status=0x%x\n", tps, read32(base));
+    if (!tps)
+        return;
+
+    USB_DIAG_STEP("usbdiag 7 powerup\n");
+    int ret = tps6598x_powerup(tps);
+    USB_DIAG_STEP("usbdiag 8 powerup=%d (no SHUTDOWN sent, controller left awake)\n", ret);
 }
 
 void usb_hpm_restore_irqs(bool force)
