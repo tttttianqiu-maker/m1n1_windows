@@ -79,6 +79,10 @@ class HV(Reloadable):
         self.p = proxy
         self.u = utils
         self.pac_mask = self.PAC_MASK
+        # Enable SPRR/GXF for the guest only where m1n1 owns GXF (it routes
+        # HCR_EL2 and friends through GL2). Callers turn this off on SoCs whose
+        # cores m1n1 does not recognize (T8122), EXP-20261106-012.
+        self.enable_guest_gxf = True
         self.user_pac_mask = self.PAC_MASK
         self.vbar_el1 = None
         self.want_vbar = None
@@ -2322,11 +2326,14 @@ class HV(Reloadable):
             print("Running pre-guest-start hook...")
             self.pre_guest_start()
 
-        print("Enabling SPRR...")
-        self.u.msr(SPRR_CONFIG_EL1, 1)
+        if self.enable_guest_gxf:
+            print("Enabling SPRR...")
+            self.u.msr(SPRR_CONFIG_EL1, 1)
 
-        print("Enabling GXF...")
-        self.u.msr(GXF_CONFIG_EL1, 1)
+            print("Enabling GXF...")
+            self.u.msr(GXF_CONFIG_EL1, 1)
+        else:
+            print("Leaving SPRR/GXF disabled for this guest")
 
         print(f"Jumping to entrypoint at 0x{self.entry:x}")
 
