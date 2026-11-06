@@ -464,6 +464,15 @@ void smp_call4(int cpu, void *func, u64 arg0, u64 arg1, u64 arg2, u64 arg3)
         sysop("dmb sy");
 }
 
+bool smp_is_done(int cpu)
+{
+    if (cpu >= MAX_CPUS)
+        return true;
+
+    sysop("dmb sy");
+    return !spin_table[cpu].target;
+}
+
 u64 smp_wait(int cpu)
 {
     if (cpu >= MAX_CPUS)

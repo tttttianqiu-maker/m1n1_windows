@@ -464,9 +464,29 @@ void hv_start(void *entry, u64 regs[4])
     spin_unlock(&bhl);
 }
 
+/*
+ * Per-CPU progress through hv_init_secondary(), so the boot CPU can report where a
+ * secondary stopped instead of waiting forever (EXP-20261106-021: CPU1 never
+ * returned from it on T8122).
+ */
+static volatile u32 hv_secondary_step[MAX_CPUS];
+#define HV_SECONDARY_STEP(n)                                                                       \
+    do {                                                                                           \
+        hv_secondary_step[smp_id()] = (n);                                                         \
+        sysop("dmb sy");                                                                           \
+    } while (0)
+
 static void hv_init_secondary(struct hv_secondary_info_t *info)
 {
-    gxf_init();
+    HV_SECONDARY_STEP(1);
+    /*
+     * Match the boot CPU: main.c only runs gxf_init() when supports_gxf(). On
+     * T8122 the cores are not in the MIDR table, so the boot CPU skipped it while
+     * every secondary still ran it unconditionally.
+     */
+    if (supports_gxf())
+        gxf_init();
+    HV_SECONDARY_STEP(2);
 
     msr(VBAR_EL1, _hv_vectors_start);
 
@@ -487,8 +507,13 @@ static void hv_init_secondary(struct hv_secondary_info_t *info)
         msr(SYS_IMP_APL_ACTLR_EL12, info->actlr_el1);
     msr(CNTHCTL_EL2, info->cnthctl);
     msr(CNTVOFF_EL2, info->cntvoff);
+    HV_SECONDARY_STEP(3);
     msr(SYS_IMP_APL_SPRR_CONFIG_EL1, info->sprr_config);
-    msr(SYS_IMP_APL_GXF_CONFIG_EL1, info->gxf_config);
+    HV_SECONDARY_STEP(4);
+    /* GXF_CONFIG is UNDEF unless SPRR is enabled (same rule as upstream m1n1). */
+    if (info->sprr_config & SPRR_CONFIG_EN)
+        msr(SYS_IMP_APL_GXF_CONFIG_EL1, info->gxf_config);
+    HV_SECONDARY_STEP(5);
 
     /*
      * VM_TMR_FIQ_ENA_EL2 is per-CPU.  The boot CPU is configured in hv_init(),
@@ -507,12 +532,15 @@ static void hv_init_secondary(struct hv_secondary_info_t *info)
     hv_vgicv3_init_list_registers();
 #endif
 
+    HV_SECONDARY_STEP(6);
     hv_configure_guest_wfi();
 
     if (gxf_enabled())
         gl2_call(hv_set_gxf_vbar, 0, 0, 0, 0);
 
+    HV_SECONDARY_STEP(7);
     hv_arm_tick(true);
+    HV_SECONDARY_STEP(8);
 }
 
 static void hv_enter_secondary(struct hv_secondary_launch_context *launch)
@@ -551,8 +579,17 @@ void hv_start_secondary(int cpu, void *entry, u64 regs[4])
 
     mmu_init_secondary(cpu);
     iodev_console_flush();
+    hv_secondary_step[cpu] = 0;
     smp_call4(cpu, hv_init_secondary, (u64)&hv_secondary_info, 0, 0, 0);
-    smp_wait(cpu);
+    for (int ms = 0; !smp_is_done(cpu); ms++) {
+        if (ms == 2000) {
+            printf("HV: secondary %d still in hv_init_secondary after 2 s, step=%u\n", cpu,
+                   hv_secondary_step[cpu]);
+            iodev_console_flush();
+        }
+        udelay(1000);
+    }
+    printf("HV: secondary %d init done (step=%u)\n", cpu, hv_secondary_step[cpu]);
     iodev_console_flush();
 
     printf("HV: Entering guest secondary %d at %p\n", cpu, entry);
