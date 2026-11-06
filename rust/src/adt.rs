@@ -763,10 +763,13 @@ pub unsafe extern "C" fn adt_is_compatible(
 ) -> bool {
     let strcompat: &str = unsafe { CStr::from_ptr(compat).to_str().unwrap() };
     let ptr: *const ADTNode = unsafe { adt.add(offset as usize) as *const ADTNode };
+    // A node without a "compatible" property is simply not compatible, as in the
+    // C implementation. Panicking here aborted the T8122 HPM walk over /arm-io
+    // (EXP-20261106-017).
     ADTNode::from_ptr(ptr)
         .unwrap()
         .is_compatible(strcompat)
-        .unwrap()
+        .unwrap_or(false)
 }
 
 #[no_mangle]
