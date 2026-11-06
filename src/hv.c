@@ -183,6 +183,8 @@ bool hv_init(void)
     // Make sure we wake up DCP if we put it to sleep, just quiesce it to match ADT
     if (display_is_external && display_start_dcp() >= 0)
         display_shutdown(DCP_QUIESCED);
+    // T8122: the guest's Type-C port needs its SPMI controller awake to act as host
+    usb_guest_port_power_up();
     // reenable hpm interrupts for the guest for unused iodevs
     usb_hpm_restore_irqs(0);
     bool secondaries_ready = smp_start_secondaries();

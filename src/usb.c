@@ -328,10 +328,6 @@ static bool usb_has_spmi_hpm(void)
 
 void usb_spmi_init(void)
 {
-    if (tps6598x_foreach_hpm(usb_spmi_hpm_match, usb_spmi_hpm_init_one, NULL, true) !=
-        HPM_FOREACH_MATCH)
-        printf("usb: no SPMI USB-C port controllers found\n");
-
     for (int idx = 0; idx < USB_IODEV_COUNT; ++idx)
         usb_phy_bringup(idx); /* Fails on missing devices, just continue */
 
@@ -477,6 +473,25 @@ void usb_i2c_restore_irqs(const char *i2c_path, bool force)
     }
 
     i2c_shutdown(i2c);
+}
+
+/*
+ * Called by the hypervisor right before guest entry, when the proxy link is up
+ * and every message (or exception) reaches the host log. Doing this at m1n1
+ * boot reset the machine before USB came up (EXP-20261106-014/015).
+ */
+void usb_guest_port_power_up(void)
+{
+    if (!usb_has_spmi_hpm())
+        return;
+
+    printf("usb: waking guest-port controller hpm%d over SPMI\n", USB_SPMI_GUEST_HPM);
+    iodev_console_flush();
+    if (tps6598x_foreach_hpm(usb_spmi_hpm_match, usb_spmi_hpm_init_one, NULL, true) !=
+        HPM_FOREACH_MATCH)
+        printf("usb: no SPMI USB-C port controller for the guest port\n");
+    printf("usb: guest-port controller done\n");
+    iodev_console_flush();
 }
 
 void usb_hpm_restore_irqs(bool force)
