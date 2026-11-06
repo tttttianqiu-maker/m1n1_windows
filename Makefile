@@ -172,6 +172,7 @@ OBJECTS := \
 	startup.o \
 	string.o \
 	tunables.o tunables_static.o \
+	spmi.o \
 	tps6598x.o \
 	uart.o \
 	uartproxy.o uartproxy_event.o \

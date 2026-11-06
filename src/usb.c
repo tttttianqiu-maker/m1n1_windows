@@ -240,7 +240,7 @@ struct iodev iodev_usb_vuart = {
 
 static tps6598x_dev_t *hpm_init(i2c_dev_t *i2c, const char *hpm_path)
 {
-    tps6598x_dev_t *tps = tps6598x_init(hpm_path, i2c);
+    tps6598x_dev_t *tps = tps6598x_init_i2c(hpm_path, i2c);
     if (!tps) {
         printf("usb: tps6598x_init failed for %s.\n", hpm_path);
         return NULL;
@@ -255,8 +255,74 @@ static tps6598x_dev_t *hpm_init(i2c_dev_t *i2c, const char *hpm_path)
     return tps;
 }
 
+static int usb_hpm_idx(const char *hpm_path)
+{
+    const char *name = strrchr(hpm_path, '/');
+    if (!name || strncmp(name + 1, "hpm", 3) != 0)
+        return -1;
+    int idx = name[4] - '0';
+    return (idx < 0 || idx >= USB_IODEV_COUNT) ? -1 : idx;
+}
+
+static bool usb_spmi_hpm_match(char *hpm_path, void *data)
+{
+    UNUSED(data);
+    return usb_hpm_idx(hpm_path) >= 0;
+}
+
+/*
+ * T8122: the USB-C port controllers sit on SPMI. Without waking and powering
+ * them up the ports only work as USB devices fed by the host's VBUS (the m1n1
+ * proxy); a port handed to the guest never sources VBUS or presents the host
+ * role (EXP-20261106-013). Same sequence as the I2C path: power up, mask IRQs.
+ */
+static int usb_spmi_hpm_init_one(char *hpm_path, tps6598x_dev_t *tps, void *data)
+{
+    UNUSED(data);
+    int idx = usb_hpm_idx(hpm_path);
+
+    if (tps6598x_powerup(tps) < 0)
+        printf("usb: tps6598x_powerup failed for %s.\n", hpm_path);
+    else
+        printf("usb: %s powered up\n", hpm_path);
+
+    if (tps6598x_disable_irqs(tps, &tps6598x_irq_state[idx]))
+        printf("usb: unable to disable IRQ masks for %s.\n", hpm_path);
+
+    return HPM_ACTION_CONTINUE;
+}
+
+static bool usb_spmi_restore_match(char *hpm_path, void *data)
+{
+    bool force = *(bool *)data;
+    int idx = usb_hpm_idx(hpm_path);
+
+    if (idx < 0 || !tps6598x_irq_state[idx].valid)
+        return false;
+    return force || !iodev_get_usage(IODEV_USB0 + idx);
+}
+
+static int usb_spmi_restore_one(char *hpm_path, tps6598x_dev_t *tps, void *data)
+{
+    UNUSED(data);
+    int idx = usb_hpm_idx(hpm_path);
+
+    if (tps6598x_restore_irqs(tps, &tps6598x_irq_state[idx]))
+        printf("usb: unable to restore IRQ masks for %s\n", hpm_path);
+    return HPM_ACTION_CONTINUE;
+}
+
+static bool usb_has_spmi_hpm(void)
+{
+    return adt_path_offset(adt, "/arm-io/nub-spmi-a0/hpm0") > 0;
+}
+
 void usb_spmi_init(void)
 {
+    if (tps6598x_foreach_hpm(usb_spmi_hpm_match, usb_spmi_hpm_init_one, NULL, true) !=
+        HPM_FOREACH_MATCH)
+        printf("usb: no SPMI USB-C port controllers found\n");
+
     for (int idx = 0; idx < USB_IODEV_COUNT; ++idx)
         usb_phy_bringup(idx); /* Fails on missing devices, just continue */
 
@@ -323,9 +389,9 @@ void usb_init(void)
 
     /*
      * M3 models do not use i2c, but instead SPMI with a new controller.
-     * We can get USB going for now by just bringing up the phys.
+     * Wake the SPMI port controllers, then bring up the phys.
      */
-    if (adt_path_offset(adt, "/arm-io/nub-spmi-a0/hpm0") > 0) {
+    if (usb_has_spmi_hpm()) {
         usb_spmi_init();
         return;
     }
@@ -406,6 +472,10 @@ void usb_i2c_restore_irqs(const char *i2c_path, bool force)
 
 void usb_hpm_restore_irqs(bool force)
 {
+    if (usb_has_spmi_hpm()) {
+        tps6598x_foreach_hpm(usb_spmi_restore_match, usb_spmi_restore_one, &force, true);
+        return;
+    }
     if (adt_is_compatible(adt, 0, "J180dAP"))
         usb_i2c_restore_irqs("/arm-io/i2c3", force);
     usb_i2c_restore_irqs("/arm-io/i2c0", force);
