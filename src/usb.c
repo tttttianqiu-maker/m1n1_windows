@@ -264,10 +264,18 @@ static int usb_hpm_idx(const char *hpm_path)
     return (idx < 0 || idx >= USB_IODEV_COUNT) ? -1 : idx;
 }
 
+/*
+ * Only wake the controller of the port handed to the guest (usb-drd1 / hpm1).
+ * Powering up hpm0, the port carrying the m1n1 proxy, reset the machine during
+ * chainload in EXP-20261106-014; upstream m1n1 also leaves the debug port's hpm
+ * alone. The J613 setup requires the proxy on the usb-drd0 port (Mu skips DWC3_0).
+ */
+#define USB_SPMI_GUEST_HPM 1
+
 static bool usb_spmi_hpm_match(char *hpm_path, void *data)
 {
     UNUSED(data);
-    return usb_hpm_idx(hpm_path) >= 0;
+    return usb_hpm_idx(hpm_path) == USB_SPMI_GUEST_HPM;
 }
 
 /*
@@ -281,6 +289,7 @@ static int usb_spmi_hpm_init_one(char *hpm_path, tps6598x_dev_t *tps, void *data
     UNUSED(data);
     int idx = usb_hpm_idx(hpm_path);
 
+    printf("usb: powering up %s\n", hpm_path);
     if (tps6598x_powerup(tps) < 0)
         printf("usb: tps6598x_powerup failed for %s.\n", hpm_path);
     else
