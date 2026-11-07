@@ -102,6 +102,12 @@ const struct midr_part_features features_m2 = {
 const struct midr_part_features features_t8122 = {
     .sleep_mode = SLEEP_NONE,
     .fast_ipi = true,
+    /*
+     * cyc_ovrd: WFI must stay in the state-retaining "core up" mode (2). With the
+     * reset value a secondary's EL2 WFI in the guest-idle trap lost every register
+     * and m1n1 faulted at FAR 0x108 on wake (ctx == NULL; EXP-20261107-027).
+     */
+    .cyc_ovrd = true,
 };
 
 // XXX figure out what features are actually available on M4
