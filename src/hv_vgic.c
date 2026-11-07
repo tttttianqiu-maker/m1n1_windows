@@ -193,6 +193,26 @@ static bool handle_j313_xhci_mmio(struct exc_info *ctx, u64 addr, u64 *val, bool
         (*val & BIT(1)))
         hv_j313_dwc3_replay_init();
 
+    /*
+     * EXP-20261107-036: on this port a USB2 attach is only latched while the controller is
+     * halted. Mu sets Run/Stop ~ms after CONFIG and finds PORTSC1 connected; Windows sets it
+     * microseconds after CONFIG and the port stays disconnected forever. Hold a Run/Stop
+     * write from the halted state until a port reports a connect (at most 1.5 s).
+     */
+    if (write && hv_xhci_cap_state_ready(&j313_xhci_caps) && offset == j313_xhci_caps.caplen &&
+        (*val & BIT(0))) {
+        u64 op = J313_XHCI1_BASE + j313_xhci_caps.caplen;
+        if (read32(op + 4) & BIT(0)) { /* USBSTS.HCH */
+            u32 waited = 0;
+            while (waited < 1500 && !(read32(op + 0x400) & 1) && !(read32(op + 0x410) & 1)) {
+                mdelay(10);
+                waited += 10;
+            }
+            printf("HV: xHCI Run/Stop held %u ms P1=0x%x P2=0x%x\n", waited, read32(op + 0x400),
+                   read32(op + 0x410));
+        }
+    }
+
     u64 pre_val = write ? *val : 0;
     if (!hv_pa_rw(ctx, addr, val, write, width))
         return false;
