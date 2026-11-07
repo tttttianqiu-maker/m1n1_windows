@@ -11,6 +11,7 @@
  * EXP-20261107-031 showed the first version failing in iovad_init (unaligned base).
  */
 #include "hv_mtp.h"
+#include "pmgr.h"
 #include "adt.h"
 #include "asc.h"
 #include "dart.h"
@@ -68,6 +69,15 @@ bool hv_mtp_init(void)
     }
     sram_base = T8122_MTP_SRAM_BASE;
     sram_size = T8122_MTP_SRAM_SIZE;
+
+    /*
+     * Power the MTP domain (ADT clock-gates of /arm-io/mtp, with parents)
+     * before touching the ASC. After macOS shuts down it is off and the
+     * coprocessor never sends HELLO (EXP-20261107-041). Linux/U-Boot get
+     * the same via power-domains.
+     */
+    int pwr = pmgr_adt_power_enable(MTP_ASC_PATH);
+    printf("hv_mtp: power domain enable %s (%d)\n", pwr < 0 ? "FAILED" : "ok", pwr);
 
     mtp_asc = asc_init(MTP_ASC_PATH);
     if (!mtp_asc) {
