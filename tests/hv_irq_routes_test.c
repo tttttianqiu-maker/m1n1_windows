@@ -30,6 +30,9 @@ int main(void)
     /* A raw AIC IRQ must not alias a synthetic guest-only interrupt. */
     assert(!hv_irq_route_resolve_incoming(64, 64, &vintid));
     assert(hv_irq_route_resolve_incoming(123, 64, &vintid));
+    /* AIC IRQ 65 must never alias the J613 AVHD virtual interrupt */
+    assert(!hv_irq_route_resolve_incoming(HV_IRQ_SYNTHETIC_AVHD_VINTID, 64, &vintid));
+    assert(!hv_irq_route_register(200, HV_IRQ_SYNTHETIC_AVHD_VINTID, false));
     assert(vintid == 123);
     assert(hv_irq_route_resolve_incoming(857, 64, &vintid));
     assert(vintid == 857);

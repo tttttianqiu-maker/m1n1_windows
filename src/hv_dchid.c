@@ -688,8 +688,22 @@ bool hv_dchid_set_mt_firmware(void *blob, size_t size)
 
 bool hv_dchid_init(void)
 {
+    static bool avhd_mapped;
+
     if (chip_id != T8122 || dc_up)
         return dc_up;
+    /*
+     * Always back the AVHD page on J613, even if the MTP failed: the DSDT
+     * advertises it unconditionally and an unbacked IPA would fault Windows.
+     * STATUS then reads 0 and the driver simply publishes nothing.
+     */
+    if (!avhd_mapped) {
+        if (hv_map_hook(HV_AVHD_IPA, avhd_hook, 0x1000))
+            printf("dchid: cannot map the AVHD device at 0x%lx\n", HV_AVHD_IPA);
+        else
+            printf("dchid: AVHD device at 0x%lx, GSIV %d\n", HV_AVHD_IPA, HV_AVHD_GSIV);
+        avhd_mapped = true;
+    }
     if (!hv_mtp_running()) {
         printf("dchid: MTP not running, no built-in keyboard/trackpad\n");
         return false;
@@ -727,10 +741,6 @@ bool hv_dchid_init(void)
            kbd_idx >= 0 ? (ifaces[kbd_idx].ready ? "ready" : "not ready") : "absent",
            mt_idx < 0 ? "absent" : (ifaces[mt_idx].ready ? "ready" : "waiting for firmware"));
 
-    if (hv_map_hook(HV_AVHD_IPA, avhd_hook, 0x1000))
-        printf("dchid: cannot map the AVHD device at 0x%lx\n", HV_AVHD_IPA);
-    else
-        printf("dchid: AVHD device at 0x%lx, GSIV %d\n", HV_AVHD_IPA, HV_AVHD_GSIV);
     return true;
 }
 

@@ -3,6 +3,7 @@
 #define HV_DCHID_H
 
 #include "types.h"
+#include "hv_irq_routes.h"
 
 /*
  * J613 (T8122) built-in keyboard and trackpad.
@@ -32,7 +33,7 @@
  *   0x800 REPORT    2 KiB window: oldest queued report bytes
  */
 #define HV_AVHD_IPA   0x5300000000UL
-#define HV_AVHD_GSIV  65
+#define HV_AVHD_GSIV  HV_IRQ_SYNTHETIC_AVHD_VINTID
 #define HV_AVHD_MAGIC 0x44485641
 
 bool hv_dchid_init(void);
