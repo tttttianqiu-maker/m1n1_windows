@@ -34,7 +34,11 @@ bool hv_mtp_running(void)
     return mtp_up;
 }
 
-/* T8122 MTP SRAM (Linux t8122.dtsi mtp "sram" reg); used if the ADT has no second reg. */
+/*
+ * T8122 MTP SRAM, from Asahi Linux t8122.dtsi (mtp reg-names "asc", "sram").
+ * The ADT's second reg is a different block (0x2fa050000 + 0x4000 on J613,
+ * EXP-20261107-040), so the ADT is only logged, never used for the SRAM.
+ */
 #define T8122_MTP_SRAM_BASE 0x2fac00000UL
 #define T8122_MTP_SRAM_SIZE 0x100000UL
 
@@ -60,16 +64,10 @@ bool hv_mtp_init(void)
             if (adt_get_reg(adt, path, "reg", i, &base, &size) < 0)
                 break;
             printf("hv_mtp: ADT %s reg[%d] = 0x%lx + 0x%lx\n", MTP_ASC_PATH, i, base, size);
-            if (i == 1) {
-                sram_base = base;
-                sram_size = size;
-            }
         }
     }
-    if (!sram_size) {
-        sram_base = T8122_MTP_SRAM_BASE;
-        sram_size = T8122_MTP_SRAM_SIZE;
-    }
+    sram_base = T8122_MTP_SRAM_BASE;
+    sram_size = T8122_MTP_SRAM_SIZE;
 
     mtp_asc = asc_init(MTP_ASC_PATH);
     if (!mtp_asc) {
