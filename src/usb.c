@@ -625,9 +625,12 @@ void usb_guest_port_phy_host_mode(void)
  */
 void usb_guest_port_phy_refresh(void)
 {
+    /* EXP-20261107-032: the full power cycle reset the Air; only switch to host mode. */
     usb_guest_port_phy_print("before-refresh");
-    usb_guest_port_phy_host(true);
+    iodev_console_flush();
+    usb_guest_port_phy_host(false);
     usb_guest_port_phy_print("after-refresh");
+    iodev_console_flush();
 }
 
 /* One-line Type-C controller state of the guest port, for the periodic xHCI trace. */
