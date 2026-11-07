@@ -193,8 +193,21 @@ static bool handle_j313_xhci_mmio(struct exc_info *ctx, u64 addr, u64 *val, bool
         (*val & BIT(1)))
         hv_j313_dwc3_replay_init();
 
+    u64 pre_val = write ? *val : 0;
     if (!hv_pa_rw(ctx, addr, val, write, width))
         return false;
+
+    /* EXP-20261107-035: trace guest writes to USBCMD/CONFIG/PORTSC (Mu vs Windows). */
+    if (write && hv_xhci_cap_state_ready(&j313_xhci_caps)) {
+        static u32 budget = 120;
+        u64 op_off = offset - j313_xhci_caps.caplen;
+        if (budget && (op_off == 0 || op_off == 0x38 || (op_off >= 0x400 && op_off < 0x420))) {
+            budget--;
+            u64 op = J313_XHCI1_BASE + j313_xhci_caps.caplen;
+            printf("HV: xHCI W op+0x%lx=0x%lx -> P1=0x%x P2=0x%x USBCMD=0x%x USBSTS=0x%x\n", op_off,
+                   pre_val, read32(op + 0x400), read32(op + 0x410), read32(op), read32(op + 4));
+        }
+    }
 
     if (!write) {
         u64 hardware_value = *val;
