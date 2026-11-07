@@ -24,6 +24,8 @@
 #include "aic_regs.h"
 #include "adt.h"
 
+u64 hv_xhci_guest_irq_count;
+
 #define TIME_ACCOUNTING
 //
 // m1n1_windows change: when the vGIC is running in the guest - timer interrupts by virtue of coming from the generic timer are
@@ -2045,6 +2047,8 @@ void hv_exc_irq(struct exc_info *ctx)
                 route->hw_irq, route->vintid, type, reason, routed_irq_trace_count + 1);
         routed_irq_trace_count++;
     }
+    if (route && route->vintid == 857)
+        __atomic_add_fetch(&hv_xhci_guest_irq_count, 1, __ATOMIC_RELAXED);
     if (route && route->level)
         aic_set_mask(route->hw_irq, true);
 
@@ -2252,8 +2256,10 @@ void hv_exc_fiq(struct exc_info *ctx)
                PERCPU(last_eoi_intid),
                PERCPU(last_eoi_tick) ? (s64)(p_now - PERCPU(last_eoi_tick)) : -1);
 #endif
-        hv_trace_j313_xhci_tick();
     }
+    /* Guest-port xHCI state every ~4 s for a few minutes (J613 Windows USB bring-up). */
+    if ((hv_fiq_count % 20000) == 0)
+        hv_trace_j313_xhci_tick();
 
     /*
      * A CLOCK_WATCHDOG_TIMEOUT is often preceded by a long freeze without a

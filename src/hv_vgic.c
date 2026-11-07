@@ -62,6 +62,7 @@ static inline u64 hv_guest_xhci_complex_base(void)
 #define J313_DART_USB1_1_BASE (hv_guest_xhci_complex_base() + 0x2f80000ULL)
 
 static u32 j313_xhci_tick_trace_budget;
+extern u64 hv_xhci_guest_irq_count;
 static struct hv_xhci_dma_trace j313_xhci_dma_trace;
 static struct hv_xhci_cap_state j313_xhci_caps;
 static u32 j313_xhci_erdp_trace_budget = 16;
@@ -263,6 +264,16 @@ void hv_trace_j313_xhci_tick(void)
         return;
     j313_xhci_tick_trace_budget--;
     hv_trace_j313_xhci("tick");
+
+    u32 caplen = read32(J313_XHCI1_BASE) & 0xff;
+    u32 maxports = read32(J313_XHCI1_BASE + 4) >> 24;
+    u64 op = J313_XHCI1_BASE + caplen;
+    if (maxports > 8)
+        maxports = 8;
+    printf("HV: xHCI tick irqs=%lu ports=%u", hv_xhci_guest_irq_count, maxports);
+    for (u32 i = 0; i < maxports; i++)
+        printf(" P%u=0x%x", i + 1, read32(op + 0x400 + 0x10 * i));
+    printf("\n");
 }
 
 static void hv_prepare_j313_xhci_handoff(void)
@@ -670,7 +681,7 @@ static bool handle_vgic_dist_access(struct exc_info *ctx, u64 addr, u64 *val, bo
                         if (route->vintid == 857) {
                             hv_prepare_j313_xhci_handoff();
                             hv_prepare_j313_xhci_darts();
-                            j313_xhci_tick_trace_budget = 24;
+                            j313_xhci_tick_trace_budget = 75;
                             hv_mark_guest_runtime_ready();
                         }
                         aic_set_mask(route->hw_irq, false);
