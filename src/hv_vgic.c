@@ -277,8 +277,10 @@ void hv_trace_j313_xhci_tick(void)
     printf(" GCTL=0x%x GSTS=0x%x GUSB2PHYCFG=0x%x GUSB3PIPECTL=0x%x\n",
            read32(J313_XHCI1_BASE + 0xc110), read32(J313_XHCI1_BASE + 0xc118),
            read32(J313_XHCI1_BASE + 0xc200), read32(J313_XHCI1_BASE + 0xc2c0));
-    if ((j313_xhci_tick_trace_budget % 4) == 0)
+    if ((j313_xhci_tick_trace_budget % 4) == 0) {
         usb_guest_port_print_status();
+        usb_guest_port_phy_print("tick");
+    }
 }
 
 static void hv_prepare_j313_xhci_handoff(void)
@@ -684,6 +686,7 @@ static bool handle_vgic_dist_access(struct exc_info *ctx, u64 addr, u64 *val, bo
                     const struct hv_irq_route *route = hv_irq_route_from_vintid(irq_num);
                     if (route) {
                         if (route->vintid == 857) {
+                            usb_guest_port_phy_refresh();
                             hv_prepare_j313_xhci_handoff();
                             hv_prepare_j313_xhci_darts();
                             j313_xhci_tick_trace_budget = 225;

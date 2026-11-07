@@ -544,6 +544,34 @@ void usb_guest_port_power_up(void)
     usb_guest_tps = tps;
 }
 
+/* Guest-port (index 1) ATC USB2 PHY and pipehandler registers. */
+void usb_guest_port_phy_print(const char *tag)
+{
+    struct usb_drd_regs r;
+    if (usb_drd_get_regs(1, &r) < 0) {
+        printf("HV: phy1 %s: no regs\n", tag);
+        return;
+    }
+    printf("HV: phy1 %s atc[0]=0x%x [4]=0x%x [8]=0x%x [1c]=0x%x ph mux=0x%x aon=0x%x nso=0x%x\n",
+           tag, read32(r.atc), read32(r.atc + 4), read32(r.atc + 8), read32(r.atc + 0x1c),
+           read32(r.drd_regs_unk3 + PIPEHANDLER_MUX_CTRL),
+           read32(r.drd_regs_unk3 + PIPEHANDLER_AON_GEN),
+           read32(r.drd_regs_unk3 + PIPEHANDLER_NONSELECTED_OVERRIDE));
+}
+
+/*
+ * EXP-20261107-031: the guest xHCI sees no connect under Windows although Mu enumerated the
+ * stick. Re-enable the port's power domains and rewrite the PHY setup m1n1 did at boot,
+ * right when Windows enables the xHCI interrupt (before it resets the controller).
+ */
+void usb_guest_port_phy_refresh(void)
+{
+    usb_guest_port_phy_print("before-refresh");
+    int ret = usb_phy_bringup(1);
+    usb_guest_port_phy_print("after-refresh");
+    printf("HV: phy1 refresh ret=%d\n", ret);
+}
+
 /* One-line Type-C controller state of the guest port, for the periodic xHCI trace. */
 void usb_guest_port_print_status(void)
 {

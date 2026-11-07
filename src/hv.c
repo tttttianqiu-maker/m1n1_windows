@@ -187,6 +187,7 @@ bool hv_init(void)
         display_shutdown(DCP_QUIESCED);
     // T8122: the guest's Type-C port needs its SPMI controller awake to act as host
     usb_guest_port_power_up();
+    usb_guest_port_phy_print("hv-init");
     // reenable hpm interrupts for the guest for unused iodevs
     usb_hpm_restore_irqs(0);
     bool secondaries_ready = smp_start_secondaries();
