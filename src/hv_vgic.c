@@ -101,9 +101,10 @@ static bool hv_xhci_map_stage2_span(dart_dev_t *dart, u64 start, u64 end, u64 *p
     return true;
 }
 
+static int j313_xhci_dart_state;
 static bool hv_prepare_j313_xhci_darts(void)
 {
-    static int state;
+#define state j313_xhci_dart_state
     dart_dev_t *darts[2];
     struct hv_xhci_stage2_view view = {
         .direct_end = J313_XHCI_LOW_DMA_END,
@@ -141,6 +142,7 @@ static bool hv_prepare_j313_xhci_darts(void)
     printf("HV: xHCI DART 32-bit stage-2 view ready pages=%lu runs=%u high_base=0x%lx\n",
            pages, runs, view.high_window_base);
     return true;
+#undef state
 }
 
 /*
@@ -171,6 +173,17 @@ static void hv_j313_dwc3_replay_init(void)
     /* SCALEDOWN=0, DISSCRAMBLE=0, PRTCAPDIR=host */
     mask32(b + DWC3_GCTL, (3 << 4) | BIT(3) | (3 << 12), (1 << 12));
     usb_guest_port_phy_host_mode();
+    /*
+     * EXP-20261107-037: in Mu the port connect appeared right after the DART bring-up that
+     * Mu's first DMA pointer write triggered; Windows never gets one. Redo it for the OS.
+     */
+    if (j313_dwc3_replays >= 1) {
+        j313_xhci_dart_state = 0;
+        bool ok = hv_prepare_j313_xhci_darts();
+        u64 op = J313_XHCI1_BASE + (read32(J313_XHCI1_BASE) & 0xff);
+        printf("HV: xHCI DART re-prepared ok=%d P1=0x%x P2=0x%x\n", ok, read32(op + 0x400),
+               read32(op + 0x410));
+    }
     printf("HV: DWC3 replay #%u GCTL 0x%x -> 0x%x GUSB2PHYCFG=0x%x\n", ++j313_dwc3_replays,
            before, read32(b + DWC3_GCTL), read32(b + DWC3_GUSB2PHYCFG));
 }
@@ -216,6 +229,18 @@ static bool handle_j313_xhci_mmio(struct exc_info *ctx, u64 addr, u64 *val, bool
     u64 pre_val = write ? *val : 0;
     if (!hv_pa_rw(ctx, addr, val, write, width))
         return false;
+
+    /* EXP-20261107-037: every other guest write in the OS phase (doorbells/ERDP excluded). */
+    if (write && j313_dwc3_replays >= 2) {
+        static u32 budget_all = 80;
+        u64 rt = j313_xhci_caps.rtsoff;
+        bool noisy = offset >= 0x4e0 && offset < 0x4e0 + 0x400; /* doorbells */
+        noisy |= offset == rt + 0x38 || offset == rt + 0x3c;      /* ERDP */
+        if (budget_all && !noisy) {
+            budget_all--;
+            printf("HV: xHCI OS W +0x%lx=0x%lx w%u\n", offset, pre_val, 1U << width);
+        }
+    }
 
     /* EXP-20261107-035: trace guest writes to USBCMD/CONFIG/PORTSC (Mu vs Windows). */
     if (write && hv_xhci_cap_state_ready(&j313_xhci_caps)) {
