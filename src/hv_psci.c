@@ -26,6 +26,8 @@
 #include "pcie.h"
 #include "smp.h"
 #include "string.h"
+
+extern bool hv_started_cpus[MAX_CPUS];
 #include "pmgr.h"
 #include "usb.h"
 #include "utils.h"
@@ -33,6 +35,8 @@
 #include "heapblock.h"
 #include "smp.h"
 #include "string.h"
+
+extern bool hv_started_cpus[MAX_CPUS];
 #include "types.h"
 #include "uartproxy.h"
 #include "adt.h"
@@ -1299,6 +1303,16 @@ int hv_psci_turn_on_cpu(uint64_t target_cpu, uint64_t entry_point, uint64_t cont
    if (cpu_identifier >= MAX_CPUS) {
       printf("PSCI: CPU_ON for unknown MPIDR 0x%lx\n", target_cpu);
       return PSCI_STATUS_INVALID_PARAMETERS;
+   }
+
+   //
+   // A core that is already running guest code (the boot CPU, or one started earlier)
+   // must not be re-entered: on T8122 the boot CPU is P-core 0x10100, and starting
+   // it "again" corrupted the secondary launch state and crashed m1n1 (EXP-20261107-025).
+   //
+   if (cpu_identifier == smp_id() || hv_started_cpus[cpu_identifier]) {
+      printf("PSCI: CPU_ON for CPU%d (MPIDR 0x%lx) which is already on\n", cpu_identifier, target_cpu);
+      return PSCI_STATUS_ALREADY_ON;
    }
 
    u64 secondary_regs[4] = {context_id, 0, 0, 0};
