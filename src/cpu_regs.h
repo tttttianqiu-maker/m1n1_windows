@@ -311,6 +311,7 @@
 #define HID9_FIX_BUG_51667805           BIT(48)
 #define HID9_FIX_BUG_55719865           BIT(55)
 
+#define SYS_IMP_APL_EHID7 sys_reg(3, 0, 15, 7, 1)
 #define SYS_IMP_APL_EHID9               sys_reg(3, 0, 15, 9, 1)
 #define EHID9_DEV_2_THROTTLE_ENABLE     BIT(5)
 #define EHID9_DEV_2_THROTTLE_LIMIT_MASK GENMASK(11, 6)
@@ -759,3 +760,9 @@
 #define AIDR_EL1_GXF            BIT(16)
 #define AIDR_EL1_APFLG          BIT(19)
 #define AIDR_EL1_PSRV           BIT(20)
+
+/* Counter redirect (M3 and later), from upstream m1n1 */
+#define SYS_IMP_APL_AGTCNTRDIR_EL1  sys_reg(3, 1, 15, 1, 5)
+#define SYS_IMP_APL_AGTCNTRDIR_EL12 sys_reg(3, 4, 15, 14, 6)
+#define AGTCNTRDIR_DISABLE          BIT(1)
+#define AGTCNTRDIR_EL0_TRAP_CTL     BIT(0)

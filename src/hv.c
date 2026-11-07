@@ -144,6 +144,8 @@ struct hv_secondary_info_t {
     uint64_t cntvoff;
     uint64_t sprr_config;
     uint64_t gxf_config;
+    uint64_t agt_cnt_rdir_el1;
+    uint64_t agt_cnt_rdir_el12;
 };
 
 static struct hv_secondary_info_t hv_secondary_info;
@@ -401,6 +403,12 @@ void hv_start(void *entry, u64 regs[4])
     hv_secondary_info.cntvoff = mrs(CNTVOFF_EL2);
     hv_secondary_info.sprr_config = mrs(SYS_IMP_APL_SPRR_CONFIG_EL1);
     hv_secondary_info.gxf_config = mrs(SYS_IMP_APL_GXF_CONFIG_EL1);
+    if (cpu_features->counter_redirect) {
+        hv_secondary_info.agt_cnt_rdir_el1 = mrs(SYS_IMP_APL_AGTCNTRDIR_EL1);
+        hv_secondary_info.agt_cnt_rdir_el12 = mrs(SYS_IMP_APL_AGTCNTRDIR_EL12);
+        printf("HV: counter redirect EL1=0x%lx EL12=0x%lx\n", hv_secondary_info.agt_cnt_rdir_el1,
+               hv_secondary_info.agt_cnt_rdir_el12);
+    }
 
     //
     // Enable the guest timer FIQs on this core. This register is per-CPU and nothing else
@@ -505,7 +513,6 @@ static void hv_init_secondary(struct hv_secondary_info_t *info)
         msr(SYS_ACTLR_EL12, info->actlr_el1);
     else
         msr(SYS_IMP_APL_ACTLR_EL12, info->actlr_el1);
-    msr(CNTHCTL_EL2, info->cnthctl);
     msr(CNTVOFF_EL2, info->cntvoff);
     HV_SECONDARY_STEP(3);
     msr(SYS_IMP_APL_SPRR_CONFIG_EL1, info->sprr_config);
@@ -514,6 +521,17 @@ static void hv_init_secondary(struct hv_secondary_info_t *info)
     if (info->sprr_config & SPRR_CONFIG_EN)
         msr(SYS_IMP_APL_GXF_CONFIG_EL1, info->gxf_config);
     HV_SECONDARY_STEP(5);
+    /*
+     * M3: give the guest CPU the same counter redirect as the boot CPU (a core
+     * started from reset by m1n1 does not inherit iBoot's setting), and per
+     * upstream m1n1 write CNTHCTL_EL2 only after the redirect.
+     */
+    if (cpu_features->counter_redirect) {
+        msr(SYS_IMP_APL_AGTCNTRDIR_EL1, info->agt_cnt_rdir_el1);
+        msr(SYS_IMP_APL_AGTCNTRDIR_EL12, info->agt_cnt_rdir_el12);
+    }
+    sysop("isb");
+    msr(CNTHCTL_EL2, info->cnthctl);
 
     /*
      * VM_TMR_FIQ_ENA_EL2 is per-CPU.  The boot CPU is configured in hv_init(),

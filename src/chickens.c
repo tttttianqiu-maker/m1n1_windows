@@ -28,6 +28,8 @@ void init_t6021_blizzard(int rev);
 void init_t6021_avalanche(int rev);
 void init_t6030_sawtooth(int rev);
 void init_t6030_everest(int rev);
+void init_t8122_everest(int rev);
+void init_t8122_sawtooth(int rev);
 void init_t6031_sawtooth(int rev);
 void init_t6031_everest(int rev);
 
@@ -92,16 +94,24 @@ const struct midr_part_features features_m2 = {
 };
 
 /*
- * T8122 (base M3, J613). Deliberately identical to features_unknown (what these
- * cores got before they were listed) except for fast_ipi: AIC3 has no AIC1-style
- * IPI registers, so without it m1n1 could never wake a secondary from deep WFI
- * and Windows' first PSCI CPU_ON hung in smp_call4 (EXP-20261106-022). Other
- * M3 features (SPRR/GXF, ACTLR_EL2, counter redirect, chicken bits) stay off
- * until each is validated on hardware.
+ * T8122 (base M3, J613): upstream m1n1's features_m3 (70757dc) except mmu_sprr,
+ * which stays off because J613 guests run with SPRR/GXF disabled
+ * (EXP-20261106-012). fast_ipi was the minimum for SMP (EXP-20261106-022);
+ * cyc_ovrd keeps guest WFI in the retention mode the M1 port needs; the
+ * counter redirect is copied to every guest CPU (hv.c).
  */
 const struct midr_part_features features_t8122 = {
-    .sleep_mode = SLEEP_NONE,
+    .disable_dc_mva = true,
+    .acc_cfg = true,
+    .cyc_ovrd = true,
+    .sleep_mode = SLEEP_GLOBAL,
+    .uncore_version = UNCORE_V2,
+    .nex_powergating = true,
     .fast_ipi = true,
+    .siq_cfg = true,
+    .amx = true,
+    .actlr_el2 = true,
+    .counter_redirect = true,
 };
 
 // XXX figure out what features are actually available on M4
@@ -141,8 +151,8 @@ const struct midr_part_info midr_parts[] = {
     {MIDR_PART_T6020_BLIZZARD, "M2 Pro Blizzard", init_t6020_blizzard, &features_m2},
     {MIDR_PART_T6021_AVALANCHE, "M2 Max Avalanche", init_t6021_avalanche, &features_m2},
     {MIDR_PART_T6021_BLIZZARD, "M2 Max Blizzard", init_t6021_blizzard, &features_m2},
-    {MIDR_PART_T8122_EVEREST, "M3 Everest", NULL, &features_t8122},
-    {MIDR_PART_T8122_SAWTOOTH, "M3 Sawtooth", NULL, &features_t8122},
+    {MIDR_PART_T8122_EVEREST, "M3 Everest", init_t8122_everest, &features_t8122},
+    {MIDR_PART_T8122_SAWTOOTH, "M3 Sawtooth", init_t8122_sawtooth, &features_t8122},
     {MIDR_PART_T6030_EVEREST, "M3 Pro Everest", init_t6030_everest, &features_m2},
     {MIDR_PART_T6030_SAWTOOTH, "M3 Pro Sawtooth", init_t6030_sawtooth, &features_m2},
     {MIDR_PART_T6031_EVEREST, "M3 Max Everest", init_t6031_everest, &features_m2},

@@ -33,3 +33,15 @@ void init_t6031_sawtooth(int rev)
 
     reg_mask(SYS_IMP_APL_HID5, HID5_BLZ_UNK_19_18_MASK, HID5_BLZ_UNK19);
 }
+
+/* T8122 (base M3) E-core chicken bits, from upstream Asahi m1n1 70757dc
+ * (src/chickens/sawtooth.c, GPL-2.0-or-later). */
+void init_t8122_sawtooth(int rev)
+{
+    UNUSED(rev);
+    reg_clr(SYS_IMP_APL_EHID9, EHID9_DEV_2_THROTTLE_ENABLE);
+    reg_clr(SYS_IMP_APL_EHID9, BIT(53));
+    reg_mask(SYS_IMP_APL_EHID9, EHID9_DEV_2_THROTTLE_LIMIT_MASK, EHID9_DEV_2_THROTTLE_LIMIT(8));
+    reg_set(SYS_IMP_APL_EHID10, BIT(47));
+    reg_set(SYS_IMP_APL_EHID7, BIT(6));
+}
