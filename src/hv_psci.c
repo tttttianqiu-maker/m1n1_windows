@@ -1262,8 +1262,14 @@ unsigned int hv_psci_translate_mpidr_to_cpu(unsigned int target_cpu) {
    unsigned int result = 0xff;
    for(int i = 0; i < MAX_CPUS; i++) {
       unsigned int saved_reg_value = psci_cpu_data_array[i].reg_value;
+      //
+      // First match only: unpopulated slots past the last core also hold 0, so a
+      // last-match search sent CPU_ON 0x0 (Sawtooth-0 on J613) to nonexistent CPU23
+      // and the boot CPU waited forever (EXP-20261107-026).
+      //
       if(mpidr_reg_to_check == saved_reg_value) {
          result = i;
+         break;
       }
    }
    if(result == 0xff) {
