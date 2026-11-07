@@ -273,7 +273,12 @@ void hv_trace_j313_xhci_tick(void)
     printf("HV: xHCI tick irqs=%lu ports=%u", hv_xhci_guest_irq_count, maxports);
     for (u32 i = 0; i < maxports; i++)
         printf(" P%u=0x%x", i + 1, read32(op + 0x400 + 0x10 * i));
-    printf("\n");
+    /* DWC3 globals: GCTL, GSTS, GUSB2PHYCFG0, GUSB3PIPECTL0 */
+    printf(" GCTL=0x%x GSTS=0x%x GUSB2PHYCFG=0x%x GUSB3PIPECTL=0x%x\n",
+           read32(J313_XHCI1_BASE + 0xc110), read32(J313_XHCI1_BASE + 0xc118),
+           read32(J313_XHCI1_BASE + 0xc200), read32(J313_XHCI1_BASE + 0xc2c0));
+    if ((j313_xhci_tick_trace_budget % 4) == 0)
+        usb_guest_port_print_status();
 }
 
 static void hv_prepare_j313_xhci_handoff(void)

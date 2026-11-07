@@ -16,6 +16,7 @@ void tps6598x_shutdown(tps6598x_dev_t *dev);
 int tps6598x_command(tps6598x_dev_t *dev, const char *cmd, const u8 *data_in, size_t len_in,
                      u8 *data_out, size_t len_out);
 int tps6598x_powerup(tps6598x_dev_t *dev);
+int tps6598x_read(tps6598x_dev_t *dev, u8 reg, u8 *data, size_t len);
 
 typedef bool(hpm_match_t)(char *hpm_path, void *data);
 // Return codes for hpm_action_t

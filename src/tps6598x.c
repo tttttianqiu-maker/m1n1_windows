@@ -89,7 +89,10 @@ static int tps6598x_spmi_select_reg(tps6598x_dev_t *dev, const u8 reg)
     if (spmi_reg0_write(dev->spmi, dev->addr, reg) < 0)
         return -1;
 
+    int tries = 0;
     while (val != reg) {
+        if (tries++ > 10000)
+            return -1;
         if (spmi_ext_read(dev->spmi, dev->addr, TPS_SPMI_REG_SELECT, &val, 1) < 0)
             return -1;
         if (val == reg)
@@ -131,6 +134,11 @@ static int tps6598x_read_reg(tps6598x_dev_t *dev, const u8 reg, u8 *data, size_t
     }
 
     return -1;
+}
+
+int tps6598x_read(tps6598x_dev_t *dev, u8 reg, u8 *data, size_t len)
+{
+    return tps6598x_read_reg(dev, reg, data, len);
 }
 
 int tps6598x_command(tps6598x_dev_t *dev, const char *cmd, const u8 *data_in, size_t len_in,

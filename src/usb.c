@@ -488,6 +488,8 @@ void usb_i2c_restore_irqs(const char *i2c_path, bool force)
         mdelay(100);                                                                               \
     } while (0)
 
+static tps6598x_dev_t *usb_guest_tps;
+
 void usb_guest_port_power_up(void)
 {
     char bus_path[] = "/arm-io/nub-spmi-a0";
@@ -539,6 +541,27 @@ void usb_guest_port_power_up(void)
     USB_DIAG_STEP("usbdiag 7 powerup\n");
     int ret = tps6598x_powerup(tps);
     USB_DIAG_STEP("usbdiag 8 powerup=%d (no SHUTDOWN sent, controller left awake)\n", ret);
+    usb_guest_tps = tps;
+}
+
+/* One-line Type-C controller state of the guest port, for the periodic xHCI trace. */
+void usb_guest_port_print_status(void)
+{
+    u8 mode[5] = {0}, status[5] = {0}, power = 0xff, ev[11] = {0};
+
+    if (!usb_guest_tps) {
+        printf("HV: hpm1 not initialised\n");
+        return;
+    }
+    int r1 = tps6598x_read(usb_guest_tps, 0x03, mode, 4);
+    int r2 = tps6598x_read(usb_guest_tps, 0x1a, status, 4);
+    int r3 = tps6598x_read(usb_guest_tps, 0x20, &power, 1);
+    int r4 = tps6598x_read(usb_guest_tps, 0x14, ev, 9);
+    printf("HV: hpm1 mode='%c%c%c%c'(%d) status=%02x%02x%02x%02x(%d) power=%u(%d) "
+           "int_event=%02x%02x%02x%02x%02x%02x%02x%02x%02x(%d)\n",
+           mode[0] ? mode[0] : '?', mode[1] ? mode[1] : '?', mode[2] ? mode[2] : '?',
+           mode[3] ? mode[3] : '?', r1, status[3], status[2], status[1], status[0], r2, power,
+           r3, ev[8], ev[7], ev[6], ev[5], ev[4], ev[3], ev[2], ev[1], ev[0], r4);
 }
 
 void usb_hpm_restore_irqs(bool force)
