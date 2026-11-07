@@ -143,6 +143,38 @@ static bool hv_prepare_j313_xhci_darts(void)
     return true;
 }
 
+/*
+ * EXP-20261107-034: Windows sees no connect on the guest port although Mu, which soft-resets
+ * the DWC3 core and both PHY interfaces before its xHCI reset, enumerates the stick. Replay
+ * Mu's DWC3 init (AppleUsbTypeCBringupDxe Dwc3XhciCoreInit + host mode) in front of every
+ * guest HCRST, so Windows' reset starts from the same state.
+ */
+#define DWC3_GCTL         0xc110
+#define DWC3_GUSB2PHYCFG  0xc200
+#define DWC3_GUSB3PIPECTL 0xc2c0
+static u32 j313_dwc3_replays;
+static void hv_j313_dwc3_replay_init(void)
+{
+    u64 b = J313_XHCI1_BASE;
+    u32 before = read32(b + DWC3_GCTL);
+
+    set32(b + DWC3_GCTL, BIT(11));           /* CORESOFTRESET */
+    set32(b + DWC3_GUSB3PIPECTL, BIT(31));   /* PHYSOFTRST */
+    set32(b + DWC3_GUSB2PHYCFG, BIT(31));    /* PHYSOFTRST */
+    sysop("dsb sy");
+    mdelay(100);
+    clear32(b + DWC3_GUSB3PIPECTL, BIT(31));
+    clear32(b + DWC3_GUSB2PHYCFG, BIT(31));
+    sysop("dsb sy");
+    mdelay(100);
+    clear32(b + DWC3_GCTL, BIT(11));
+    /* SCALEDOWN=0, DISSCRAMBLE=0, PRTCAPDIR=host */
+    mask32(b + DWC3_GCTL, (3 << 4) | BIT(3) | (3 << 12), (1 << 12));
+    usb_guest_port_phy_host_mode();
+    printf("HV: DWC3 replay #%u GCTL 0x%x -> 0x%x GUSB2PHYCFG=0x%x\n", ++j313_dwc3_replays,
+           before, read32(b + DWC3_GCTL), read32(b + DWC3_GUSB2PHYCFG));
+}
+
 static bool handle_j313_xhci_mmio(struct exc_info *ctx, u64 addr, u64 *val, bool write,
                                   int width)
 {
@@ -156,6 +188,10 @@ static bool handle_j313_xhci_mmio(struct exc_info *ctx, u64 addr, u64 *val, bool
     /* Install the guest IPA -> PA DART view before the first DMA pointer reaches xHCI. */
     if (write && reg != HV_XHCI_DMA_REG_NONE && !hv_prepare_j313_xhci_darts())
         return false;
+
+    if (write && hv_xhci_cap_state_ready(&j313_xhci_caps) && offset == j313_xhci_caps.caplen &&
+        (*val & BIT(1)))
+        hv_j313_dwc3_replay_init();
 
     if (!hv_pa_rw(ctx, addr, val, write, width))
         return false;
