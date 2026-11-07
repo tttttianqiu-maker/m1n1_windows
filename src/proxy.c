@@ -10,6 +10,7 @@
 #include "gxf.h"
 #include "heapblock.h"
 #include "hv.h"
+#include "hv_dchid.h"
 #include "hv_diag.h"
 #include "hv_launch_j313.h"
 #include "iodev.h"
@@ -476,6 +477,9 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
 
         case P_HV_INIT:
             reply->retval = hv_init();
+            break;
+        case P_HV_MTP_FIRMWARE:
+            reply->retval = hv_dchid_set_mt_firmware((void *)request->args[0], request->args[1]);
             break;
         case P_HV_MAP:
             hv_map(request->args[0], request->args[1], request->args[2], request->args[3]);

@@ -157,6 +157,7 @@ typedef enum {
     P_HV_DIAG_SAMPLE = 0xc1c,
     P_HV_LAUNCH_PUBLISH = 0xc1d,
     P_HV_LAUNCH_CAPTURE = 0xc1e,
+    P_HV_MTP_FIRMWARE = 0xc1f,
 
     P_FB_INIT = 0xd00,
     P_FB_SHUTDOWN,

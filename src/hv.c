@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 
 #include "hv.h"
+#include "hv_dchid.h"
 #include "hv_mtp.h"
 #include "hv_tick_policy.h"
 #include "hv_runtime_diag.h"
@@ -275,8 +276,6 @@ bool hv_init(void)
 
     //
     hv_vgicv3_init();
-    /* T8122 only: boot the keyboard/trackpad coprocessor; harmless if it fails. */
-    hv_mtp_init();
     init_vgic_irq_queues();
     //
 #endif
@@ -367,6 +366,14 @@ void hv_start(void *entry, u64 regs[4])
 
     memset(hv_should_exit, 0, sizeof(hv_should_exit));
     memset(hv_started_cpus, 0, sizeof(hv_started_cpus));
+
+    /*
+     * T8122 only: boot the keyboard/trackpad coprocessor and bring up DockChannel HID.
+     * Done here and not in hv_init(): it can take a few seconds, longer than the proxy
+     * reply timeout, and P_HV_START does not reply until the guest exits anyway.
+     */
+    if (hv_mtp_init())
+        hv_dchid_init();
 
     hv_started_cpus[boot_cpu_idx] = true;
 
@@ -1457,6 +1464,7 @@ void hv_tick(struct exc_info *ctx)
 {
     hv_wdt_pet();
     hv_mtp_poll();
+    hv_dchid_poll();
     struct hv_diag_sample_v1 diag_sample;
     if (hv_diag_tick(ctx, &diag_sample) && hv_runtime_diag_enabled())
         hv_diag_delivery_offer(&hv_diag_event_delivery, &diag_sample);

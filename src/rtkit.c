@@ -88,6 +88,9 @@ struct rtkit_dev {
     iova_domain_t *dart_iovad;
     sart_dev_t *sart;
     bool sram;
+    /* Optional IOP SRAM window: buffer requests that carry an address inside it
+     * are IOP-provided SRAM (no reply), everything else goes through the DART. */
+    u64 sram_win_base, sram_win_size;
 
     u64 dva_base;
 
@@ -282,6 +285,15 @@ static bool rtkit_handle_buffer_request(rtkit_dev_t *rtk, struct rtkit_message *
     size_t n_4kpages = FIELD_GET(MSG_BUFFER_REQUEST_SIZE, msg->msg);
     size_t sz = n_4kpages << 12;
     u64 addr = FIELD_GET(MSG_BUFFER_REQUEST_IOVA, msg->msg);
+
+    if (addr && rtk->sram_win_size && addr >= rtk->sram_win_base &&
+        addr + sz <= rtk->sram_win_base + rtk->sram_win_size) {
+        bfr->dva = addr;
+        bfr->bfr = (void *)addr;
+        bfr->sz = sz;
+        rtkit_printf("SRAM buffer (ep 0x%x, 0x%lx, 0x%lx bytes)\n", msg->ep, addr, sz);
+        return true;
+    }
 
     if (rtk->sram) {
         if (!addr) {
@@ -491,6 +503,12 @@ bool rtkit_start_ep(rtkit_dev_t *rtk, u8 ep)
     }
 
     return true;
+}
+
+void rtkit_set_sram_window(rtkit_dev_t *rtk, u64 base, u64 size)
+{
+    rtk->sram_win_base = base;
+    rtk->sram_win_size = size;
 }
 
 bool rtkit_boot(rtkit_dev_t *rtk)

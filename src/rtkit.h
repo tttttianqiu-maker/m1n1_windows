@@ -30,6 +30,7 @@ void rtkit_free(rtkit_dev_t *rtk);
 
 bool rtkit_start_ep(rtkit_dev_t *rtk, u8 ep);
 bool rtkit_boot(rtkit_dev_t *rtk);
+void rtkit_set_sram_window(rtkit_dev_t *rtk, u64 base, u64 size);
 
 bool rtkit_can_recv(rtkit_dev_t *rtk);
 
