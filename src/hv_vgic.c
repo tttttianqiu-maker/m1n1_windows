@@ -199,10 +199,11 @@ static bool handle_j313_xhci_mmio(struct exc_info *ctx, u64 addr, u64 *val, bool
 
     /* EXP-20261107-035: trace guest writes to USBCMD/CONFIG/PORTSC (Mu vs Windows). */
     if (write && hv_xhci_cap_state_ready(&j313_xhci_caps)) {
-        static u32 budget = 120;
+        static u32 budget_fw = 40, budget_os = 100;
+        u32 *budget = j313_dwc3_replays >= 2 ? &budget_os : &budget_fw;
         u64 op_off = offset - j313_xhci_caps.caplen;
-        if (budget && (op_off == 0 || op_off == 0x38 || (op_off >= 0x400 && op_off < 0x420))) {
-            budget--;
+        if (*budget && (op_off == 0 || op_off == 0x38 || (op_off >= 0x400 && op_off < 0x420))) {
+            (*budget)--;
             u64 op = J313_XHCI1_BASE + j313_xhci_caps.caplen;
             printf("HV: xHCI W op+0x%lx=0x%lx -> P1=0x%x P2=0x%x USBCMD=0x%x USBSTS=0x%x\n", op_off,
                    pre_val, read32(op + 0x400), read32(op + 0x410), read32(op), read32(op + 4));
