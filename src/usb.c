@@ -564,12 +564,70 @@ void usb_guest_port_phy_print(const char *tag)
  * stick. Re-enable the port's power domains and rewrite the PHY setup m1n1 did at boot,
  * right when Windows enables the xHCI interrupt (before it resets the controller).
  */
+/* Register layout from Linux drivers/phy/apple/atc.c (USB2PHY_*). */
+#define U2_USBCTL         0x00
+#define U2_USBCTL_RUN     2
+#define U2_CTL            0x04
+#define U2_CTL_RESET      BIT(0)
+#define U2_CTL_PORT_RESET BIT(1)
+#define U2_CTL_APB_RESETN BIT(2)
+#define U2_CTL_SIDDQ      BIT(3)
+#define U2_SIG            0x08
+#define U2_SIG_VBUS_FORCE (BIT(0) | BIT(1) | BIT(2) | BIT(3))
+#define U2_SIG_HOST       (7 << 12)
+#define U2_MISCTUNE       0x1c
+#define U2_MISCTUNE_GATES (BIT(29) | BIT(30))
+
+/* Host-mode USB2 PHY for the guest port; reset=true power-cycles it first. */
+static void usb_guest_port_phy_host(bool reset)
+{
+    struct usb_drd_regs r;
+    if (usb_drd_get_regs(1, &r) < 0)
+        return;
+    u64 p = r.atc;
+
+    if (reset) {
+        /* power off: hold the PHY in reset and low power */
+        write32(p + U2_USBCTL, 0);
+        set32(p + U2_CTL, U2_CTL_SIDDQ | U2_CTL_RESET | U2_CTL_PORT_RESET);
+        clear32(p + U2_CTL, U2_CTL_APB_RESETN);
+        udelay(20);
+        /* power on */
+        set32(p + U2_SIG, U2_SIG_VBUS_FORCE);
+        udelay(10);
+        clear32(p + U2_CTL, U2_CTL_SIDDQ);
+        udelay(10);
+        clear32(p + U2_CTL, U2_CTL_RESET);
+        udelay(10);
+        clear32(p + U2_CTL, U2_CTL_PORT_RESET);
+        udelay(10);
+        set32(p + U2_CTL, U2_CTL_APB_RESETN);
+        udelay(10);
+        clear32(p + U2_MISCTUNE, U2_MISCTUNE_GATES);
+        udelay(10);
+    }
+    set32(p + U2_SIG, U2_SIG_VBUS_FORCE | U2_SIG_HOST);
+    write32(p + U2_USBCTL, U2_USBCTL_RUN);
+    udelay(50);
+}
+
+/* hv_init: the guest port is a host port for the guest, not m1n1's gadget. */
+void usb_guest_port_phy_host_mode(void)
+{
+    usb_guest_port_phy_host(false);
+    usb_guest_port_phy_print("host-mode");
+}
+
+/*
+ * When Windows enables the xHCI interrupt, before it resets the controller: reset the USB2
+ * PHY (Linux does the same at probe because boot stages leave it in an unknown state) and
+ * bring it up in host mode.
+ */
 void usb_guest_port_phy_refresh(void)
 {
     usb_guest_port_phy_print("before-refresh");
-    int ret = usb_phy_bringup(1);
+    usb_guest_port_phy_host(true);
     usb_guest_port_phy_print("after-refresh");
-    printf("HV: phy1 refresh ret=%d\n", ret);
 }
 
 /* One-line Type-C controller state of the guest port, for the periodic xHCI trace. */
