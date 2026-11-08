@@ -98,7 +98,6 @@ static size_t mt_fw_size;
 static bool mt_started, mt_start_failed, dims_valid;
 static u8 mt_power_method = DCHID_POWER_METHOD_2;
 static u8 dims[16];
-static smc_dev_t *smc;
 
 /* guest-visible report queue */
 static DECLARE_SPINLOCK(vhid_lock);
@@ -126,21 +125,43 @@ static u32 smc_gpio_key(unsigned int gpio)
            (u32)hex[gpio & 0xf];
 }
 
-/* active-low reset line: asserted = physical 0 */
-static bool reset_line_set(unsigned int gpio, bool asserted)
+/*
+ * Active-low reset lines (asserted = physical 0) are SMC GPIO keys. Like
+ * upstream dcp.c: open the SMC, write, and shut it down again. Leaving the
+ * SMC RTKit booted with nobody servicing it took the machine down shortly
+ * after bring-up (SError, EXP-20261108-045).
+ */
+static bool smc_gpio_write(smc_dev_t *smc, unsigned int gpio, bool asserted)
 {
-    if (!smc) {
-        smc = smc_init();
-        if (!smc) {
-            printf("dchid: smc_init failed, cannot drive GPIO %u\n", gpio);
-            return false;
-        }
-    }
     int ret = smc_write_u32(smc, smc_gpio_key(gpio), SMC_GPIO_CMD_OUTPUT | (asserted ? 0 : 1));
     if (ret)
         printf("dchid: SMC GPIO %u <- %s failed (%d)\n", gpio, asserted ? "assert" : "release",
                ret);
     return ret == 0;
+}
+
+/* pulse_ms 0: set the line once; otherwise assert, wait, release. */
+static bool reset_line_op(unsigned int gpio, bool asserted, unsigned int pulse_ms)
+{
+    smc_dev_t *smc = smc_init();
+    bool ok;
+
+    if (!smc) {
+        printf("dchid: smc_init failed, cannot drive GPIO %u\n", gpio);
+        return false;
+    }
+    ok = smc_gpio_write(smc, gpio, asserted);
+    if (ok && pulse_ms) {
+        mdelay(pulse_ms);
+        ok = smc_gpio_write(smc, gpio, false);
+    }
+    smc_shutdown(smc);
+    return ok;
+}
+
+static bool reset_line_set(unsigned int gpio, bool asserted)
+{
+    return reset_line_op(gpio, asserted, 0);
 }
 
 static int gpio_for_name(const char *name)
@@ -546,11 +567,8 @@ static void handle_gpio_request(void)
         printf("dchid: GPIO command %u for %s '%s' (line %d)\n", gpio_req.cmd, i->name,
                i->gpio_name, line);
         if (line >= 0 && gpio_req.cmd == 3) { /* pulse */
-            if (reset_line_set(line, true)) {
-                mdelay(10);
-                reset_line_set(line, false);
+            if (reset_line_op(line, true, 10))
                 retcode = 0;
-            }
         }
     } else {
         printf("dchid: GPIO command for unknown interface/GPIO\n");

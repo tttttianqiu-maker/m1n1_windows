@@ -101,6 +101,7 @@ struct rtkit_dev {
     struct rtkit_buffer crashlog_bfr;
     struct rtkit_buffer ioreport_bfr;
     struct rtkit_buffer oslog_bfr;
+    u32 oslog_msgs;
 
     u32 syslog_cnt, syslog_size;
 
@@ -299,7 +300,10 @@ static bool rtkit_handle_oslog(rtkit_dev_t *rtk, struct rtkit_message *msg)
     u64 iova = FIELD_GET(OSLOG_IOVA, msg->msg) << 12;
 
     if (type != OSLOG_BUFFER_REQUEST) {
-        rtkit_printf("unknown oslog message %lx\n", msg->msg);
+        /* log traffic once the buffer exists; only show the first few */
+        if (rtk->oslog_msgs++ < 4)
+            rtkit_printf("oslog message %lx%s\n", msg->msg,
+                         rtk->oslog_msgs == 4 ? " (further ones not shown)" : "");
         return true;
     }
     if (iova) {
