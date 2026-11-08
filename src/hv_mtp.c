@@ -11,7 +11,7 @@
  * EXP-20261107-031 showed the first version failing in iovad_init (unaligned base).
  */
 #include "hv_mtp.h"
-#include "pmgr.h"
+#include "dapf.h"
 #include "adt.h"
 #include "asc.h"
 #include "dart.h"
@@ -70,21 +70,22 @@ bool hv_mtp_init(void)
     sram_base = T8122_MTP_SRAM_BASE;
     sram_size = T8122_MTP_SRAM_SIZE;
 
-    /*
-     * Power the MTP domain (ADT clock-gates of /arm-io/mtp, with parents)
-     * before touching the ASC. After macOS shuts down it is off and the
-     * coprocessor never sends HELLO (EXP-20261107-041). Linux/U-Boot get
-     * the same via power-domains.
-     */
-    int pwr = pmgr_adt_power_enable(MTP_ASC_PATH);
-    printf("hv_mtp: power domain enable %s (%d)\n", pwr < 0 ? "FAILED" : "ok", pwr);
-
     mtp_asc = asc_init(MTP_ASC_PATH);
     if (!mtp_asc) {
         printf("hv_mtp: asc_init failed\n");
         return false;
     }
     printf("hv_mtp: ASC CPU %s before boot\n", asc_cpu_running(mtp_asc) ? "running" : "stopped");
+
+    /*
+     * DAPF (DMA access filter) of the MTP DART: kboot.c runs dapf_init_all()
+     * before Linux; without it the coprocessor's own fabric accesses are
+     * filtered and it never sends HELLO (EXP-20261107-041/042). The MTP_*
+     * pmgr devices are "no ps" on T8122 (probe 20261108-101642), so there
+     * is no power domain to enable from here.
+     */
+    int dapf = dapf_init(MTP_DART_PATH, 1);
+    printf("hv_mtp: DAPF %s init %s (%d)\n", MTP_DART_PATH, dapf < 0 ? "FAILED" : "ok", dapf);
 
     mtp_dart = dart_init_adt(MTP_DART_PATH, 0, MTP_DART_SID, false);
     if (!mtp_dart) {
