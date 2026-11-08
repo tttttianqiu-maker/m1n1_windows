@@ -416,6 +416,10 @@ static void handle_packet(const struct dchid_hdr *hdr, const u8 *body)
         handle_report(hdr->iface, payload, sub->length);
 }
 
+/* RX diagnostics, printed when bring-up times out. */
+static u32 dc_rx_bytes, dc_rx_pkts, dc_rx_resync;
+static u8 dc_rx_first[32];
+
 /* Drain the RX FIFO, dispatching complete packets. */
 static void dc_pump(void)
 {
@@ -429,21 +433,31 @@ static void dc_pump(void)
         if (avail >= 4 && want >= 4) {
             u32 w = read32(DC_DATA + DATA_RX32);
             memcpy(rx_pkt + rx_have, &w, 4);
+            for (int b = 0; b < 4; b++)
+                if (dc_rx_bytes + b < sizeof(dc_rx_first))
+                    dc_rx_first[dc_rx_bytes + b] = w >> (8 * b);
             rx_have += 4;
+            dc_rx_bytes += 4;
         } else {
-            rx_pkt[rx_have++] = read32(DC_DATA + DATA_RX8) >> 8;
+            rx_pkt[rx_have] = read32(DC_DATA + DATA_RX8) >> 8;
+            if (dc_rx_bytes < sizeof(dc_rx_first))
+                dc_rx_first[dc_rx_bytes] = rx_pkt[rx_have];
+            rx_have++;
+            dc_rx_bytes++;
         }
 
         if (rx_have == sizeof(struct dchid_hdr)) {
             struct dchid_hdr *h = (void *)rx_pkt;
             if (h->hdr_len != sizeof(*h)) {
                 printf("dchid: bad header length %u, resyncing\n", h->hdr_len);
+                dc_rx_resync++;
                 rx_have = 0;
                 continue;
             }
             rx_need = sizeof(*h) + h->length + 4;
         }
         if (rx_have > sizeof(struct dchid_hdr) && rx_have == rx_need) {
+            dc_rx_pkts++;
             handle_packet((void *)rx_pkt, rx_pkt + sizeof(struct dchid_hdr));
             rx_have = 0;
             rx_need = 0;
@@ -740,6 +754,15 @@ bool hv_dchid_init(void)
            ticks_to_msecs(get_ticks() - start),
            kbd_idx >= 0 ? (ifaces[kbd_idx].ready ? "ready" : "not ready") : "absent",
            mt_idx < 0 ? "absent" : (ifaces[mt_idx].ready ? "ready" : "waiting for firmware"));
+    printf("dchid: rx %u bytes, %u packets, %u resyncs; RX_COUNT=%u IRQ_FLAG=0x%x TX_FREE=%u\n",
+           dc_rx_bytes, dc_rx_pkts, dc_rx_resync, read32(DC_DATA + DATA_RX_COUNT),
+           read32(DC_IRQ_BASE + IRQ_FLAG), read32(DC_DATA + DATA_TX_FREE));
+    if (dc_rx_bytes) {
+        printf("dchid: first rx bytes:");
+        for (u32 b = 0; b < dc_rx_bytes && b < sizeof(dc_rx_first); b++)
+            printf(" %02x", dc_rx_first[b]);
+        printf("\n");
+    }
 
     return true;
 }

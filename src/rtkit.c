@@ -100,6 +100,7 @@ struct rtkit_dev {
     struct rtkit_buffer syslog_bfr;
     struct rtkit_buffer crashlog_bfr;
     struct rtkit_buffer ioreport_bfr;
+    struct rtkit_buffer oslog_bfr;
 
     u32 syslog_cnt, syslog_size;
 
@@ -181,6 +182,7 @@ void rtkit_free(rtkit_dev_t *rtk)
     rtkit_free_buffer(rtk, &rtk->syslog_bfr);
     rtkit_free_buffer(rtk, &rtk->crashlog_bfr);
     rtkit_free_buffer(rtk, &rtk->ioreport_bfr);
+    rtkit_free_buffer(rtk, &rtk->oslog_bfr);
     free(rtk->name);
     free(rtk);
 }
@@ -277,6 +279,51 @@ bool rtkit_free_buffer(rtkit_dev_t *rtk, struct rtkit_buffer *bfr)
     free(bfr->bfr);
 
     return false;
+}
+
+/*
+ * OSLOG buffer request, as Linux drivers/soc/apple/rtkit.c handles it:
+ * type 63:56 (1 = buffer request), size 55:36 (bytes), iova>>12 in 35:0.
+ * An IOP-provided iova (e.g. in SRAM) needs no reply; otherwise allocate and
+ * answer with the same layout. Unanswered, the IOP may stall its services.
+ */
+#define OSLOG_TYPE           GENMASK(63, 56)
+#define OSLOG_BUFFER_REQUEST 1
+#define OSLOG_SIZE           GENMASK(55, 36)
+#define OSLOG_IOVA           GENMASK(35, 0)
+
+static bool rtkit_handle_oslog(rtkit_dev_t *rtk, struct rtkit_message *msg)
+{
+    u64 type = FIELD_GET(OSLOG_TYPE, msg->msg);
+    u64 size = FIELD_GET(OSLOG_SIZE, msg->msg);
+    u64 iova = FIELD_GET(OSLOG_IOVA, msg->msg) << 12;
+
+    if (type != OSLOG_BUFFER_REQUEST) {
+        rtkit_printf("unknown oslog message %lx\n", msg->msg);
+        return true;
+    }
+    if (iova) {
+        rtkit_printf("oslog buffer provided by IOP (0x%lx, 0x%lx bytes)\n", iova, size);
+        return true;
+    }
+    if (rtk->oslog_bfr.bfr) {
+        rtkit_printf("oslog buffer requested twice, reusing\n");
+    } else if (!rtkit_alloc_buffer(rtk, &rtk->oslog_bfr, ALIGN_UP(size ? size : 1, SZ_16K))) {
+        rtkit_printf("unable to allocate oslog buffer (0x%lx bytes)\n", size);
+        return false;
+    }
+
+    struct asc_message reply;
+    reply.msg1 = msg->ep;
+    reply.msg0 = FIELD_PREP(OSLOG_TYPE, OSLOG_BUFFER_REQUEST);
+    reply.msg0 |= FIELD_PREP(OSLOG_SIZE, size);
+    reply.msg0 |= FIELD_PREP(OSLOG_IOVA, (rtk->oslog_bfr.dva | rtk->dva_base) >> 12);
+    if (!asc_send(rtk->asc, &reply)) {
+        rtkit_printf("unable to send oslog buffer reply\n");
+        return false;
+    }
+    rtkit_printf("oslog buffer 0x%lx bytes at dva 0x%lx\n", size, rtk->oslog_bfr.dva);
+    return true;
 }
 
 static bool rtkit_handle_buffer_request(rtkit_dev_t *rtk, struct rtkit_message *msg,
@@ -473,7 +520,7 @@ int rtkit_recv(rtkit_dev_t *rtk, struct rtkit_message *msg)
                 }
                 break;
             case RTKIT_EP_OSLOG:
-                rtkit_printf("unknown oslog message %lx\n", msg->msg);
+                ok = ok && rtkit_handle_oslog(rtk, msg);
                 break;
             default:
                 rtkit_printf("message to unknown system endpoint 0x%02x: %lx\n", msg->ep, msg->msg);
