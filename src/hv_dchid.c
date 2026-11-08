@@ -572,8 +572,19 @@ static bool mt_set_power(u8 state)
         return comm_cmd(msg, n) >= 0;
     }
     n = dchid_power_cmd(msg, DCHID_POWER_METHOD_2, mt_idx, state, false);
-    if (comm_cmd(msg, n) < 0)
-        return false;
+    if (comm_cmd(msg, n) < 0) {
+        /*
+         * Power method 2 (aurora's J613 "25G83" profile) is firmware-version
+         * specific; this MTP firmware rejected it (0xe00002c2, bad argument,
+         * EXP-20261108-044). Fall back to Linux mainline power method 1:
+         * {0x40, 1, iface, state}; the MTP then sequences the trackpad itself
+         * and asks for reset pulses through GPIO_CMD events.
+         */
+        printf("dchid: power method 2 rejected, falling back to method 1\n");
+        mt_power_method = DCHID_POWER_METHOD_1;
+        n = dchid_power_cmd(msg, DCHID_POWER_METHOD_1, mt_idx, state, false);
+        return comm_cmd(msg, n) >= 0;
+    }
     reset_line_set(J613_GPIO_AFE_RESET, state == DCHID_POWER_OFF);
     if (state == DCHID_POWER_OFF)
         mdelay(50);
@@ -623,8 +634,13 @@ static void mt_start(void)
     }
 
     u64 start = get_ticks();
-    while (!ifaces[mt_idx].ready && ticks_to_msecs(get_ticks() - start) < START_TIMEOUT_MS)
+    while (!ifaces[mt_idx].ready && ticks_to_msecs(get_ticks() - start) < START_TIMEOUT_MS) {
+        hv_mtp_poll();
         dc_pump();
+        /* method 1: the MTP requests AFE reset pulses while it starts the trackpad */
+        if (gpio_pending && !in_cmd)
+            handle_gpio_request();
+    }
     if (!ifaces[mt_idx].ready) {
         printf("dchid: trackpad not ready after firmware\n");
         mt_start_failed = true;
