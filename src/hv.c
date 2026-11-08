@@ -372,7 +372,8 @@ void hv_start(void *entry, u64 regs[4])
      * Done here and not in hv_init(): it can take a few seconds, longer than the proxy
      * reply timeout, and P_HV_START does not reply until the guest exits anyway.
      */
-    hv_mtp_init();
+    if (!hv_dchid_mtp_disabled())
+        hv_mtp_init();
     hv_dchid_init(); /* maps AVHD even when the MTP failed; checks hv_mtp_running() */
 
     hv_started_cpus[boot_cpu_idx] = true;

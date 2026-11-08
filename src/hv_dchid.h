@@ -40,5 +40,7 @@ bool hv_dchid_init(void);
 void hv_dchid_poll(void);
 /* Trackpad firmware ("HIDF" container, asahi tpmtfw-j613.bin) staged by the proxy. */
 bool hv_dchid_set_mt_firmware(void *blob, size_t size);
+/* Host asked to skip the MTP bring-up (addr 0, size 0). */
+bool hv_dchid_mtp_disabled(void);
 
 #endif

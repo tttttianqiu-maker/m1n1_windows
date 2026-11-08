@@ -724,8 +724,23 @@ static void process_actions(void)
 
 /* ---------- public ---------- */
 
+/* Set from the host (P_HV_MTP_FIRMWARE with addr 0, size 0): skip the MTP. */
+static bool mtp_disabled;
+
+bool hv_dchid_mtp_disabled(void)
+{
+    return mtp_disabled;
+}
+
 bool hv_dchid_set_mt_firmware(void *blob, size_t size)
 {
+    if (!blob && !size) {
+        /* Stability switch (EXP-20261108-047): no MTP/DockChannel bring-up at
+         * all; the AVHD page is still mapped and reads STATUS 0. */
+        mtp_disabled = true;
+        printf("dchid: MTP bring-up disabled by the host\n");
+        return true;
+    }
     if (!blob || !size)
         return false;
     mt_fw = blob;
