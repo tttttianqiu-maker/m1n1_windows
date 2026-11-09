@@ -11,6 +11,8 @@
 #include "display.h"
 #include "gxf.h"
 #include "hv_diag.h"
+#include "fb.h"
+#include "hv_fb_mirror.h"
 #include "hv_fb_stream.h"
 #include "hv_guest_cpu_state.h"
 #include "hv_apple_input.h"
@@ -55,6 +57,7 @@ u64 hv_cpus_in_guest;
 bool hv_rendezvous_active;
 u64 hv_saved_sp[MAX_CPUS];
 static struct hv_fb_stream hv_framebuffer_stream;
+static struct hv_fb_mirror hv_framebuffer_mirror;
 static struct hv_diag_delivery hv_diag_event_delivery;
 
 static void hv_collect_diag(void *opaque, const struct exc_info *ctx,
@@ -131,6 +134,46 @@ bool hv_configure_fb_stream(u64 ipa, u64 size, u64 width, u64 height, u64 stride
                                   hv_ipa_to_pa, hv_send_fb_chunk, NULL);
 }
 
+/*
+ * Mirror the guest's virtual framebuffer onto the internal panel by copying it
+ * into the boot framebuffer iBoot left scanning out (hv_fb_mirror.h). All
+ * arguments 0 disables it. Requires fb_init() to have mapped the boot
+ * framebuffer (Normal-NC) in m1n1's page tables.
+ */
+bool hv_configure_fb_mirror(u64 ipa, u64 size, u64 width, u64 height, u64 stride,
+                            u64 rows_per_tick)
+{
+    if (!ipa && !size && !width && !height && !stride) {
+        hv_fb_mirror_disable(&hv_framebuffer_mirror);
+        return true;
+    }
+    hv_fb_mirror_disable(&hv_framebuffer_mirror);
+    if (!fb.hwptr || (u64)fb.hwptr != cur_boot_args.video.base) {
+        printf("HV: fb mirror: no boot framebuffer mapped\n");
+        return false;
+    }
+    if (width > 0xffff || height > 0xffff || stride > 0xffffffffULL ||
+        rows_per_tick > 0xffffffffULL || !size || size != stride * height)
+        return false;
+
+    u64 pa = hv_ipa_to_pa(ipa);
+    u64 last_pa = hv_ipa_to_pa(ipa + size - 1);
+    if (!pa || !last_pa || last_pa - pa != size - 1) {
+        printf("HV: fb mirror: guest framebuffer 0x%lx is not contiguous RAM\n", ipa);
+        return false;
+    }
+
+    bool ok = hv_fb_mirror_configure(
+        &hv_framebuffer_mirror, pa, width, height, stride, cur_boot_args.video.base,
+        cur_boot_args.video.width, cur_boot_args.video.height, cur_boot_args.video.stride,
+        cur_boot_args.video.depth, rows_per_tick, dc_civac_range);
+    printf("HV: fb mirror %s: guest 0x%lx %lux%lu -> panel 0x%lx %lux%lu depth %lu, %u rows/tick\n",
+           ok ? "on" : "REJECTED", pa, width, height, cur_boot_args.video.base,
+           cur_boot_args.video.width, cur_boot_args.video.height,
+           cur_boot_args.video.depth & 0xff, hv_framebuffer_mirror.rows_per_tick);
+    return ok;
+}
+
 struct hv_secondary_info_t {
     uint64_t hcr;
     uint64_t hacr;
@@ -182,6 +225,7 @@ bool hv_init(void)
     hv_diag_reset();
     hv_diag_set_collector(hv_collect_diag, NULL);
     hv_fb_stream_disable(&hv_framebuffer_stream);
+    hv_fb_mirror_disable(&hv_framebuffer_mirror);
     pcie_shutdown();
     // Make sure we wake up DCP if we put it to sleep, just quiesce it to match ADT
     if (display_is_external && display_start_dcp() >= 0)
@@ -1487,4 +1531,5 @@ void hv_tick(struct exc_info *ctx)
     }
     hv_vuart_poll();
     hv_fb_stream_tick(&hv_framebuffer_stream);
+    hv_fb_mirror_tick(&hv_framebuffer_mirror);
 }

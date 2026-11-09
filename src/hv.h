@@ -80,6 +80,8 @@ int hv_pci_intx_irq(void);
 u64 hv_pci_bar_window(void);
 u64 hv_ipa_to_pa(u64 ipa);
 bool hv_configure_fb_stream(u64 ipa, u64 size, u64 width, u64 height, u64 stride);
+bool hv_configure_fb_mirror(u64 ipa, u64 size, u64 width, u64 height, u64 stride,
+                            u64 rows_per_tick);
 bool hv_nvme_init_backend(void);
 void hv_nvme_map_bar(u64 base);
 void hv_nvme_unmap_bar(void);

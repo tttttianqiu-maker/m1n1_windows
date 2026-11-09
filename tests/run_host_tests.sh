@@ -23,6 +23,7 @@ hv_exception_lower_test
 hv_diag_test
 hv_fb_stream_test
 hv_fb_stream_usb_limit_test
+hv_fb_mirror_test
 hv_guest_cpu_state_test
 hv_irq_routes_test
 hv_pci_state_test
@@ -112,6 +113,10 @@ for name in "$@"; do
         hv_fb_stream_test)
             definitions="-DHV_FB_STREAM_HOST_TEST -DHV_FB_STREAM_PAYLOAD_SIZE=4"
             sources="$sources src/hv_fb_stream.c"
+            ;;
+        hv_fb_mirror_test)
+            definitions="-DHV_FB_MIRROR_HOST_TEST"
+            sources="$sources src/hv_fb_mirror.c"
             ;;
         hv_fb_stream_usb_limit_test)
             definitions="-DHV_FB_STREAM_HOST_TEST -DUARTPROXY_EVENT_HOST_TEST"

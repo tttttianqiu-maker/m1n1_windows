@@ -508,6 +508,11 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
                 request->args[0], request->args[1], request->args[2], request->args[3],
                 request->args[4]);
             break;
+        case P_HV_FB_MIRROR_CONFIG:
+            reply->retval = hv_configure_fb_mirror(request->args[0], request->args[1],
+                                                   request->args[2], request->args[3],
+                                                   request->args[4], request->args[5]);
+            break;
         case P_HV_DIAG_STATUS:
             reply->retval = hv_diag_copy_status((void *)request->args[0], request->args[1]);
             break;
