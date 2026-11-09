@@ -10,6 +10,7 @@
 #include "memory.h"
 #include "uart.h"
 #include "utils.h"
+#include "xnuboot.h"
 
 #define EL0_STACK_SIZE 0x4000
 
@@ -237,6 +238,13 @@ void print_regs(u64 *regs, int el12)
             l2c_pa < mcc_carveouts[i].base + mcc_carveouts[i].size)
             printf("L2C_ERR_ADR is inside TZ carveout 0x%lx..0x%lx\n", mcc_carveouts[i].base,
                    mcc_carveouts[i].base + mcc_carveouts[i].size);
+    }
+    {
+        /* RAM above phys_base + mem_size holds iBoot/coprocessor carveouts. */
+        u64 usable_end = cur_boot_args.phys_base + cur_boot_args.mem_size;
+        if (l2c_pa >= usable_end && l2c_pa - usable_end < (1ULL << 36))
+            printf("L2C_ERR_ADR is 0x%lx above usable RAM (carveout area, %zu TZ regions unmapped)\n",
+                   l2c_pa - usable_end, mcc_carveout_count);
     }
     printf("L2C_ERR_INF: 0x%lx\n", mrs(SYS_IMP_APL_L2C_ERR_INF));
     msr(SYS_IMP_APL_L2C_ERR_STS, sts);
