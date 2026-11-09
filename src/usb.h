@@ -16,6 +16,7 @@ void usb_guest_port_print_status(void);
 void usb_guest_port_phy_print(const char *tag);
 void usb_guest_port_phy_refresh(void);
 void usb_guest_port_phy_host_mode(void);
+int usb_guest_port_reset_ordered(u64 dwc3);
 void usb_iodev_init(void);
 void usb_iodev_shutdown(void);
 void usb_iodev_vuart_setup(iodev_id_t iodev);

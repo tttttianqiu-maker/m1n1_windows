@@ -633,6 +633,126 @@ void usb_guest_port_phy_refresh(void)
     iodev_console_flush();
 }
 
+/*
+ * Full guest-port reset in the order Linux uses (drivers/phy/apple/atc.c
+ * atcphy_dwc3_reset_assert/_deassert, atcphy_usb2_power_off/_on, and
+ * drivers/usb/dwc3/dwc3-apple.c), followed by Mu's DWC3 core init
+ * (AppleUsbTypeCBringupDxe). Opt-in, for the guest OS's controller reset.
+ *
+ * Why: dwc3-apple.c documents that after PHY + DWC3 init only a single "new device
+ * connected" event is ever reported ("XHCI's port status register actually does show the
+ * correct state but no interrupt ever comes in"), because the USB2 lines run through an
+ * eUSB2 repeater the USB-PD chip resets on every CC change; the PHY must be reset to
+ * resynchronise. Mu consumes that one event, Windows never gets another (EXP-029..037).
+ * EXP-20261107-032 power-cycled the USB2 PHY while the DWC3 was running and the SoC reset:
+ * Linux always holds the DWC3 in reset with its clamps on (pipehandler AON_GEN) first.
+ */
+#define GP_DWC3_GSBUSCFG0          0xc100
+#define GP_DWC3_GSBUSCFG1          0xc104
+#define GP_DWC3_GCTL               0xc110
+#define GP_DWC3_GCTL_CORESOFTRESET BIT(11)
+#define GP_DWC3_GSNPSID            0xc120
+#define GP_DWC3_GHWPARAMS1         0xc144
+#define GP_DWC3_GUSB2PHYCFG        0xc200
+#define GP_DWC3_GUSB3PIPECTL       0xc2c0
+#define GP_DWC3_GFLADJ             0xc630
+#define GP_DWC3_PHYSOFTRST         BIT(31)
+#define GP_APPLE_CIO_LFPS          0xcd38
+#define GP_APPLE_CIO_BW_NGT        0xcd3c
+#define GP_APPLE_CIO_LINK_TIMER    0xcd40
+#define U2_USBCTL_ISOLATION     4
+
+int usb_guest_port_reset_ordered(u64 dwc3)
+{
+    struct usb_drd_regs r;
+    if (usb_drd_get_regs(1, &r) < 0)
+        return -1;
+    u64 ph = r.drd_regs_unk3, u2 = r.atc;
+    u32 mux = read32(ph + PIPEHANDLER_MUX_CTRL);
+
+    /* m1n1 only ever runs this port's PIPE on the dummy backend (USB2 only). */
+    if (mux != PIPEHANDLER_MUX_CTRL_DUMMY) {
+        printf("usb: ordered reset skipped, PIPE mux 0x%x is not dummy\n", mux);
+        return -1;
+    }
+    printf("usb: ordered guest-port reset (Linux atcphy order)\n");
+    iodev_console_flush();
+
+    /* 1. DWC3 into reset with its clamps on */
+    clear32(ph + PIPEHANDLER_AON_GEN, PIPEHANDLER_AON_GEN_DWC3_RESET_N);
+    set32(ph + PIPEHANDLER_AON_GEN, PIPEHANDLER_AON_GEN_DWC3_FORCE_CLAMP_EN);
+    udelay(10);
+
+    /* 2. USB2 PHY off */
+    write32(u2 + U2_USBCTL, U2_USBCTL_ISOLATION);
+    udelay(10);
+    set32(u2 + U2_CTL, U2_CTL_SIDDQ);
+    udelay(10);
+    set32(u2 + U2_CTL, U2_CTL_PORT_RESET);
+    udelay(10);
+    set32(u2 + U2_CTL, U2_CTL_RESET);
+    udelay(10);
+    clear32(u2 + U2_CTL, U2_CTL_APB_RESETN);
+    udelay(10);
+    set32(u2 + U2_MISCTUNE, U2_MISCTUNE_GATES);
+    udelay(100);
+
+    /* 3. USB2 PHY on, host mode */
+    set32(u2 + U2_SIG, U2_SIG_VBUS_FORCE);
+    udelay(10);
+    clear32(u2 + U2_CTL, U2_CTL_SIDDQ);
+    udelay(10);
+    clear32(u2 + U2_CTL, U2_CTL_RESET);
+    udelay(10);
+    clear32(u2 + U2_CTL, U2_CTL_PORT_RESET);
+    udelay(10);
+    set32(u2 + U2_CTL, U2_CTL_APB_RESETN);
+    udelay(10);
+    clear32(u2 + U2_MISCTUNE, U2_MISCTUNE_GATES);
+    write32(u2 + U2_USBCTL, U2_USBCTL_RUN);
+    set32(u2 + U2_SIG, U2_SIG_HOST);
+    udelay(50);
+
+    /* 4. DWC3 out of reset */
+    clear32(ph + PIPEHANDLER_AON_GEN, PIPEHANDLER_AON_GEN_DWC3_FORCE_CLAMP_EN);
+    set32(ph + PIPEHANDLER_AON_GEN, PIPEHANDLER_AON_GEN_DWC3_RESET_N);
+    udelay(100);
+
+    u32 snpsid = read32(dwc3 + GP_DWC3_GSNPSID) & 0xffff0000;
+    if (snpsid != 0x33310000 && snpsid != 0x55330000) {
+        printf("usb: ordered reset: DWC3 ID 0x%x unexpected, stopping\n",
+               read32(dwc3 + GP_DWC3_GSNPSID));
+        return -1;
+    }
+
+    /* 5. Mu's Dwc3XhciCoreInit + AppleUsbTypeCBringupDxeInitializeUsbController */
+    set32(dwc3 + GP_DWC3_GCTL, GP_DWC3_GCTL_CORESOFTRESET);
+    set32(dwc3 + GP_DWC3_GUSB3PIPECTL, GP_DWC3_PHYSOFTRST);
+    set32(dwc3 + GP_DWC3_GUSB2PHYCFG, GP_DWC3_PHYSOFTRST);
+    mdelay(100);
+    clear32(dwc3 + GP_DWC3_GUSB3PIPECTL, GP_DWC3_PHYSOFTRST);
+    clear32(dwc3 + GP_DWC3_GUSB2PHYCFG, GP_DWC3_PHYSOFTRST);
+    mdelay(100);
+    clear32(dwc3 + GP_DWC3_GCTL, GP_DWC3_GCTL_CORESOFTRESET);
+    /* SCALEDOWN=0, DISSCRAMBLE=0, PRTCAPDIR=host; DSBLCLKGTNG=0 only with clock power-opt */
+    u32 gctl_clear = (3 << 4) | BIT(3) | (3 << 12);
+    if (((read32(dwc3 + GP_DWC3_GHWPARAMS1) >> 24) & 3) == 1)
+        gctl_clear |= BIT(0);
+    mask32(dwc3 + GP_DWC3_GCTL, gctl_clear, 1 << 12);
+    write32(dwc3 + GP_APPLE_CIO_LFPS, 0x0f800f80);
+    write32(dwc3 + GP_APPLE_CIO_BW_NGT, 0x0fc00fc0);
+    mask32(dwc3 + GP_APPLE_CIO_LINK_TIMER, 0x00ffffff, 0x00140a10);
+    write32(dwc3 + GP_DWC3_GUSB2PHYCFG, read32(dwc3 + GP_DWC3_GUSB2PHYCFG));
+    set32(dwc3 + GP_DWC3_GFLADJ, BIT(7) | 0x20);
+    mask32(dwc3 + GP_DWC3_GSBUSCFG0, 0xff, 0x0f);
+    set32(dwc3 + GP_DWC3_GSBUSCFG1, 0xf00);
+
+    printf("usb: ordered reset done: GCTL=0x%x GUSB2PHYCFG=0x%x SIG=0x%x aon=0x%x\n",
+           read32(dwc3 + GP_DWC3_GCTL), read32(dwc3 + GP_DWC3_GUSB2PHYCFG), read32(u2 + U2_SIG),
+           read32(ph + PIPEHANDLER_AON_GEN));
+    return 0;
+}
+
 /* One-line Type-C controller state of the guest port, for the periodic xHCI trace. */
 void usb_guest_port_print_status(void)
 {

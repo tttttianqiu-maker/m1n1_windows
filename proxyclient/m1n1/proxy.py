@@ -661,6 +661,7 @@ class M1N1Proxy(Reloadable):
     P_HV_LAUNCH_CAPTURE = 0xc1e
     P_HV_MTP_FIRMWARE = 0xc1f
     P_HV_FB_MIRROR_CONFIG = 0xc20
+    P_HV_USB_RESET_MODE = 0xc21
 
     P_FB_INIT = 0xd00
     P_FB_SHUTDOWN = 0xd01
@@ -1107,6 +1108,9 @@ class M1N1Proxy(Reloadable):
         return self.request(self.P_HV_INIT)
     def hv_mtp_firmware(self, addr, size):
         return self.request(self.P_HV_MTP_FIRMWARE, addr, size)
+    def hv_usb_reset_mode(self, enable):
+        # Guest-port USB: Linux-ordered PHY + DWC3 reset at the guest OS's HCRST.
+        return self.request(self.P_HV_USB_RESET_MODE, 1 if enable else 0)
     def hv_fb_mirror_config(self, ipa, size, width, height, stride, rows_per_tick=0):
         # Copy the guest framebuffer onto the internal panel (boot framebuffer);
         # all zero disables. rows_per_tick 0 = m1n1 default.

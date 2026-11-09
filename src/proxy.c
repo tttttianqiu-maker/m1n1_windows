@@ -508,6 +508,11 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
                 request->args[0], request->args[1], request->args[2], request->args[3],
                 request->args[4]);
             break;
+        case P_HV_USB_RESET_MODE:
+            hv_usb_ordered_reset = request->args[0] != 0;
+            printf("HV: guest USB ordered reset %s\n", hv_usb_ordered_reset ? "ON" : "off");
+            reply->retval = 1;
+            break;
         case P_HV_FB_MIRROR_CONFIG:
             reply->retval = hv_configure_fb_mirror(request->args[0], request->args[1],
                                                    request->args[2], request->args[3],
