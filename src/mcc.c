@@ -55,6 +55,15 @@ struct tz_regs t602x_tz_regs = {
     .enable = 0x6c8,
 };
 
+/* upstream m1n1 src/mcc.c t8122_tz_regs */
+struct tz_regs t8122_tz_regs = {
+    .count = 4,
+    .stride = 0x14,
+    .start = 0x6cc,
+    .end = 0x6d0,
+    .enable = 0x6d8,
+};
+
 struct tz_regs t603x_tz_regs = {
     .count = 4,
     .stride = 0x14,
@@ -83,6 +92,11 @@ struct tz_regs t603x_tz_regs = {
 #define T6031_CACHE_STATUS_VAL                                                                     \
     (FIELD_PREP(T6000_CACHE_STATUS_DATA_COUNT, T6031_CACHE_WAYS) |                                 \
      FIELD_PREP(T6000_CACHE_STATUS_TAG_COUNT, T6031_CACHE_WAYS))
+
+#define T8122_CACHE_WAYS 16
+#define T8122_CACHE_STATUS_VAL                                                                     \
+    (FIELD_PREP(T6000_CACHE_STATUS_DATA_COUNT, T8122_CACHE_WAYS) |                                 \
+     FIELD_PREP(T6000_CACHE_STATUS_TAG_COUNT, T8122_CACHE_WAYS))
 
 #define T8103_CACHE_WAYS        16
 #define T8103_CACHE_STATUS_MASK (T8103_CACHE_STATUS_DATA_COUNT | T8103_CACHE_STATUS_TAG_COUNT)
@@ -318,10 +332,19 @@ int mcc_init_t6000(int node, int *path, bool t602x)
     return 0;
 }
 
-int mcc_init_t6031(int node, int *path)
+/*
+ * T6031 and T8122 (M3) share the register layout; T8122 differs in the TZ
+ * register offsets and has 16 cache ways (upstream m1n1 mcc_init_m3()).
+ * Without this, mcc_init() failed on the M3 and mcc_unmap_carveouts() did
+ * nothing: the TrustZone carveouts stayed mapped as normal memory for m1n1
+ * and in the guest's stage 2, so speculative accesses into them raised
+ * SErrors (L2C_ERR_ADR near the top of RAM).
+ */
+int mcc_init_t6031(int node, int *path, bool t8122)
 {
     u32 reg_len;
     u32 reg_offset = 3;
+    const char *name = t8122 ? "T8122" : "T6031";
 
     if (!adt_getprop(adt, node, "reg", &reg_len)) {
         printf("MCC: Failed to get reg property!\n");
@@ -330,7 +353,7 @@ int mcc_init_t6031(int node, int *path)
 
     mcc_count = reg_len / 16 - reg_offset;
 
-    printf("MCC: Initializing T6031 MCCs (%d instances)...\n", mcc_count);
+    printf("MCC: Initializing %s MCCs (%d instances)...\n", name, mcc_count);
 
     if (mcc_count > MAX_MCC_INSTANCES) {
         printf("MCC: Too many instances, increase MAX_MCC_INSTANCES!\n");
@@ -368,15 +391,15 @@ int mcc_init_t6031(int node, int *path)
         mcc_regs[i].dcs_count = dcs_count;
 
         mcc_regs[i].cache_enable_val = 1;
-        mcc_regs[i].cache_ways = T6031_CACHE_WAYS;
+        mcc_regs[i].cache_ways = t8122 ? T8122_CACHE_WAYS : T6031_CACHE_WAYS;
         mcc_regs[i].cache_status_mask = T6031_CACHE_STATUS_MASK;
-        mcc_regs[i].cache_status_val = T6031_CACHE_STATUS_VAL;
+        mcc_regs[i].cache_status_val = t8122 ? T8122_CACHE_STATUS_VAL : T6031_CACHE_STATUS_VAL;
         mcc_regs[i].cache_disable = 0;
 
-        mcc_regs[i].tz = &t603x_tz_regs;
+        mcc_regs[i].tz = t8122 ? &t8122_tz_regs : &t603x_tz_regs;
     }
 
-    printf("MCC: Initialized T6031 MCCs (%d instances, %d planes, %d channels)\n", mcc_count,
+    printf("MCC: Initialized %s MCCs (%d instances, %d planes, %d channels)\n", name, mcc_count,
            mcc_regs[0].plane_count, mcc_regs[0].dcs_count);
 
     mcc_initialized = true;
@@ -403,7 +426,9 @@ int mcc_init(void)
     } else if (adt_is_compatible(adt, node, "mcc,t6020")) {
         return mcc_init_t6000(node, path, true);
     } else if (adt_is_compatible(adt, node, "mcc,t6031")) {
-        return mcc_init_t6031(node, path);
+        return mcc_init_t6031(node, path, false);
+    } else if (adt_is_compatible(adt, node, "mcc,t8122")) {
+        return mcc_init_t6031(node, path, true);
     } else {
         printf("MCC: Unsupported version:%s\n", adt_get_property(adt, node, "compatible")->value);
         return -1;

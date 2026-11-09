@@ -6,6 +6,7 @@
 #include "cpu_regs.h"
 #include "gxf.h"
 #include "iodev.h"
+#include "mcc.h"
 #include "memory.h"
 #include "uart.h"
 #include "utils.h"
@@ -227,7 +228,16 @@ void print_regs(u64 *regs, int el12)
 
     u64 sts = mrs(SYS_IMP_APL_L2C_ERR_STS);
     printf("L2C_ERR_STS: 0x%lx\n", sts);
-    printf("L2C_ERR_ADR: 0x%lx\n", mrs(SYS_IMP_APL_L2C_ERR_ADR));
+    u64 l2c_adr = mrs(SYS_IMP_APL_L2C_ERR_ADR);
+    printf("L2C_ERR_ADR: 0x%lx\n", l2c_adr);
+    /* Low 42 bits hold the physical address (e.g. 0x3820103fbbdc140 -> 0x103fbbdc140). */
+    u64 l2c_pa = l2c_adr & GENMASK(41, 0);
+    for (size_t i = 0; i < mcc_carveout_count; i++) {
+        if (l2c_pa >= mcc_carveouts[i].base &&
+            l2c_pa < mcc_carveouts[i].base + mcc_carveouts[i].size)
+            printf("L2C_ERR_ADR is inside TZ carveout 0x%lx..0x%lx\n", mcc_carveouts[i].base,
+                   mcc_carveouts[i].base + mcc_carveouts[i].size);
+    }
     printf("L2C_ERR_INF: 0x%lx\n", mrs(SYS_IMP_APL_L2C_ERR_INF));
     msr(SYS_IMP_APL_L2C_ERR_STS, sts);
 
