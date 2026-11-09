@@ -162,3 +162,150 @@ size_t dchid_power_cmd(u8 *out, u8 method, u8 iface, u8 state, bool has_changed)
     out[3] = state;
     return 4;
 }
+
+unsigned int dchid_fixup_report_size(u8 *desc, size_t len)
+{
+    unsigned int fixed = 0;
+
+    if (!desc || len < 5)
+        return 0;
+    for (size_t i = 0; i + 5 <= len; i++) {
+        u8 count = desc[i + 4];
+        if (desc[i] == 0x76 && desc[i + 1] == 0x00 && desc[i + 2] == 0x40 &&
+            desc[i + 3] == 0x95 && count > 0 && count < 32) {
+            desc[i] = 0x75;
+            desc[i + 1] = 0x08;
+            desc[i + 2] = 0x96;
+            desc[i + 3] = 0x00;
+            desc[i + 4] = (u8)(count * 8);
+            fixed++;
+        }
+    }
+    return fixed;
+}
+
+const u8 dchid_guest_kbd_desc[] = {
+    0x05, 0x01,       /* Usage Page (Generic Desktop) */
+    0x09, 0x06,       /* Usage (Keyboard) */
+    0xa1, 0x01,       /* Collection (Application) */
+    0x85, DCHID_KBD_REPORT_ID,
+    0x05, 0x07,       /*   Usage Page (Keyboard/Keypad) */
+    0x19, 0xe0,       /*   Usage Minimum (Left Control) */
+    0x29, 0xe7,       /*   Usage Maximum (Right GUI) */
+    0x15, 0x00,       /*   Logical Minimum (0) */
+    0x25, 0x01,       /*   Logical Maximum (1) */
+    0x75, 0x01,       /*   Report Size (1) */
+    0x95, 0x08,       /*   Report Count (8) */
+    0x81, 0x02,       /*   Input (Data, Var, Abs): modifiers */
+    0x75, 0x08,       /*   Report Size (8) */
+    0x95, 0x01,       /*   Report Count (1) */
+    0x81, 0x01,       /*   Input (Const): reserved */
+    0x19, 0x00,       /*   Usage Minimum (0) */
+    0x2a, 0xff, 0x00, /*   Usage Maximum (255) */
+    0x26, 0xff, 0x00, /*   Logical Maximum (255) */
+    0x95, 0x06,       /*   Report Count (6) */
+    0x81, 0x00,       /*   Input (Data, Array): key codes */
+    0x06, 0x00, 0xff, /*   Usage Page (Vendor 0xff00) */
+    0x09, 0x03,       /*   Usage (0x03): Apple Fn byte */
+    0x95, 0x01,       /*   Report Count (1) */
+    0x81, 0x02,       /*   Input (Data, Var, Abs) */
+    0xc0,             /* End Collection */
+};
+const size_t dchid_guest_kbd_desc_len = sizeof(dchid_guest_kbd_desc);
+
+void dchid_kbd_iso_swap(u8 report[DCHID_KBD_REPORT_LEN])
+{
+    for (int b = 3; b < 9; b++) {
+        if (report[b] == 0x35)
+            report[b] = 0x64;
+        else if (report[b] == 0x64)
+            report[b] = 0x35;
+    }
+}
+
+int dchid_mt_sanitize(const u8 *in, size_t len, u8 *out, size_t cap, size_t *out_len)
+{
+    size_t nf, need;
+
+    if (!in || !out || !out_len || len < DCHID_MT_HDR_SIZE)
+        return -1;
+    nf = in[DCHID_MT_NFINGERS_OFFSET];
+    if (nf > DCHID_MT_GUEST_FINGERS)
+        nf = DCHID_MT_GUEST_FINGERS;
+    need = DCHID_MT_HDR_SIZE + nf * DCHID_MT_FINGER_SIZE;
+    if (len < need || need > cap)
+        return -1;
+    memcpy(out, in, need);
+    out[DCHID_MT_NFINGERS_OFFSET] = (u8)nf;
+    out[DCHID_MT_BUTTONS_OFFSET] &= 1;
+    *out_len = need;
+    return len != need || nf != in[DCHID_MT_NFINGERS_OFFSET] ? 1 : 0;
+}
+
+void dchid_vq_push(struct dchid_vq *q, u8 iface, const u8 *data, size_t len)
+{
+    struct dchid_vq_ring *r = &q->ring[iface ? 1 : 0];
+
+    if (!r->slot || !r->cap || !len)
+        return;
+    if (len > DCHID_VQ_SLOT_SIZE)
+        len = DCHID_VQ_SLOT_SIZE;
+    if (r->count == r->cap) { /* full-state reports: keep the newest */
+        r->head = (r->head + 1) % r->cap;
+        r->count--;
+        q->count--;
+        q->drops++;
+    }
+    struct dchid_vq_slot *sl = &r->slot[(r->head + r->count) % r->cap];
+    sl->seq = ++q->seq;
+    sl->len = (u16)len;
+    sl->iface = iface ? 1 : 0;
+    memcpy(sl->data, data, len);
+    r->count++;
+    q->count++;
+}
+
+const struct dchid_vq_slot *dchid_vq_latch(struct dchid_vq *q)
+{
+    struct dchid_vq_ring *best = NULL;
+
+    if (q->cur_valid)
+        return &q->cur;
+    for (int i = 0; i < 2; i++) {
+        struct dchid_vq_ring *r = &q->ring[i];
+        /* seq comparison by difference: wrap-safe */
+        if (r->count && (!best || (s32)(r->slot[r->head].seq - best->slot[best->head].seq) < 0))
+            best = r;
+    }
+    if (!best)
+        return NULL;
+    const struct dchid_vq_slot *sl = &best->slot[best->head];
+    q->cur.seq = sl->seq;
+    q->cur.len = sl->len;
+    q->cur.iface = sl->iface;
+    memcpy(q->cur.data, sl->data, sl->len);
+    q->cur_valid = true;
+    return &q->cur;
+}
+
+void dchid_vq_pop(struct dchid_vq *q)
+{
+    if (!q->cur_valid)
+        return;
+    struct dchid_vq_ring *r = &q->ring[q->cur.iface ? 1 : 0];
+    /* Unless it was evicted meanwhile, the latched report is its ring's head. */
+    if (r->count && r->slot[r->head].seq == q->cur.seq) {
+        r->head = (r->head + 1) % r->cap;
+        r->count--;
+        q->count--;
+    }
+    q->cur_valid = false;
+}
+
+void dchid_vq_flush(struct dchid_vq *q)
+{
+    for (int i = 0; i < 2; i++)
+        q->ring[i].head = q->ring[i].count = 0;
+    q->count = 0;
+    q->cur_valid = false;
+}

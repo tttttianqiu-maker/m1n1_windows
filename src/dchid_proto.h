@@ -17,6 +17,7 @@ typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
+typedef int32_t s32;
 #else
 #include "types.h"
 #endif
@@ -155,5 +156,68 @@ bool dchid_fw_parse(const u8 *blob, size_t size, const u8 **data, u32 *data_len,
                     u32 *iface_offset);
 /* Interface power command (power method 1: 4 bytes, method 2: 9 bytes). */
 size_t dchid_power_cmd(u8 *out, u8 method, u8 iface, u8 state, bool has_changed);
+/*
+ * MTP HID descriptors advertise Report Size 0x4000 (16384 bits) items, which
+ * Linux hid-core rejects (report_size > 256). Same rewrite as the upstream
+ * DockChannel HID transport / hid-apple (2026-06 series, patches 07+08):
+ * 76 00 40 95 n (1 <= n < 32) -> 75 08 96 00 n*8, i.e. the same number of
+ * bits as 8-bit fields. Returns the number of items rewritten.
+ */
+unsigned int dchid_fixup_report_size(u8 *desc, size_t len);
+
+/*
+ * Keyboard descriptor served to the guest (AVHD DESC with DESC_SEL 0): a
+ * plain boot-layout keyboard matching the MTP keyboard input report 1
+ * (10 bytes: id, modifiers, reserved, 6 key codes, vendor byte).
+ */
+#define DCHID_KBD_REPORT_ID  0x01
+#define DCHID_KBD_REPORT_LEN 10
+extern const u8 dchid_guest_kbd_desc[];
+extern const size_t dchid_guest_kbd_desc_len;
+
+/* Apple ISO keyboards: swap usages 0x35 and 0x64 (Linux hid-apple apple_iso_keyboard). */
+void dchid_kbd_iso_swap(u8 report[DCHID_KBD_REPORT_LEN]);
+
+/* MTP trackpad report 0x75 (Linux hid-magicmouse.c struct tp_header / tp_finger). */
+#define DCHID_MT_HDR_SIZE        38
+#define DCHID_MT_FINGER_SIZE     30
+#define DCHID_MT_NFINGERS_OFFSET 22
+#define DCHID_MT_BUTTONS_OFFSET  23
+#define DCHID_MT_GUEST_FINGERS   11 /* AI_APPLE_TRACKPAD_MAX_CONTACTS of the Windows decoder */
+#define DCHID_MT_GUEST_MAX (DCHID_MT_HDR_SIZE + DCHID_MT_GUEST_FINGERS * DCHID_MT_FINGER_SIZE)
+/*
+ * Reduce a report to header + num_fingers * 30 (Linux accepts spare finger
+ * slots, the Windows decoder wants the exact length), at most 11 fingers,
+ * buttons bit 0 only. Returns 0 (as is), 1 (trimmed) or -1 (unusable).
+ */
+int dchid_mt_sanitize(const u8 *in, size_t len, u8 *out, size_t cap, size_t *out_len);
+
+/*
+ * Guest report queue: one ring per interface (0 keyboard, 1 trackpad), the
+ * oldest report dropped on overflow; the guest reads a latched copy of the
+ * oldest report and pops it. No locking here (callers hold their lock).
+ */
+#define DCHID_VQ_SLOT_SIZE 1024
+struct dchid_vq_slot {
+    u32 seq;
+    u16 len;
+    u8 iface;
+    u8 data[DCHID_VQ_SLOT_SIZE];
+};
+struct dchid_vq_ring {
+    struct dchid_vq_slot *slot;
+    u32 cap, head, count;
+};
+struct dchid_vq {
+    struct dchid_vq_ring ring[2];
+    struct dchid_vq_slot cur;
+    bool cur_valid;
+    u32 seq, count, drops;
+};
+void dchid_vq_push(struct dchid_vq *q, u8 iface, const u8 *data, size_t len);
+/* Latch the oldest report if none is latched; returns the latched one or NULL. */
+const struct dchid_vq_slot *dchid_vq_latch(struct dchid_vq *q);
+void dchid_vq_pop(struct dchid_vq *q);
+void dchid_vq_flush(struct dchid_vq *q);
 
 #endif

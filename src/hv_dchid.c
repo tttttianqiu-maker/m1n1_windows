@@ -15,6 +15,7 @@
 #include "hv.h"
 #include "hv_mtp.h"
 #include "hv_vgic.h"
+#include "keyboard_types.h"
 #include "malloc.h"
 #include "smc.h"
 #include "soc.h"
@@ -47,8 +48,9 @@
 #define ENUM_QUIET_MS    50
 #define START_TIMEOUT_MS 2000
 
-#define VHID_SLOTS     64
-#define VHID_SLOT_SIZE 1024
+/* Guest report rings: the keyboard never loses its latest state to trackpad traffic. */
+#define VHID_KBD_SLOTS 16
+#define VHID_MT_SLOTS  48
 
 struct iface {
     bool present;
@@ -96,20 +98,42 @@ static size_t gpio_req_len;
 static u8 *mt_fw;
 static size_t mt_fw_size;
 static bool mt_started, mt_start_failed, dims_valid;
-static u8 mt_power_method = DCHID_POWER_METHOD_2;
+/*
+ * Linux dockchannel-hid resets multi-touch with power method 1
+ * {0x40, 1, iface, state}; this J613 MTP firmware rejects method 2
+ * (0xe00002c2, EXP-20261108-044), so start with method 1.
+ */
+static u8 mt_power_method = DCHID_POWER_METHOD_1;
 static u8 dims[16];
 
-/* guest-visible report queue */
+/*
+ * Guest-visible report queue: one ring per interface, oldest report dropped on
+ * overflow (keyboard and trackpad reports are full-state snapshots, so the
+ * newest one must survive or a key/finger stays down in Windows). The guest
+ * reads RX_LEN/RX_IFACE/REPORT from a latched copy of the oldest report, so a
+ * push that evicts it mid-read cannot tear the data; RX_POP releases it.
+ */
 static DECLARE_SPINLOCK(vhid_lock);
-static struct {
-    u16 len;
-    u8 iface;
-    u8 data[VHID_SLOT_SIZE];
-} *vhid_q;
-static u32 vhid_head, vhid_count, vhid_drops;
+static struct dchid_vq vq;
+static bool kbd_iso;
+static u32 mt_trimmed, mt_bad;
 static u32 vhid_desc_sel;
 static bool vhid_irq_pending;
 static u32 report_log_budget = 24;
+static u32 kbd_other_reports;
+
+/*
+ * What the guest does with the AVHD page (EXP-049 follow-up): the driver's
+ * PrepareHardware reads MAGIC, its timer reads STATUS/RX_LEN, the keyboard
+ * load reads DESC_LEN + the DESC window, every drained report is a POP.
+ * First occurrences are printed at once, a summary every 10 s on change.
+ */
+static struct {
+    u32 magic, status, desc_len, desc_win, dims, rx_len, pops, acks, sel;
+    u32 injected;
+    bool irq_enabled;
+} avhd_tm, avhd_tm_logged;
+static u64 avhd_tm_ticks;
 
 static u32 get_le32p(const u8 *p)
 {
@@ -194,30 +218,19 @@ static bool dc_write(const u8 *buf, size_t len)
 
 static void vhid_push(u8 viface, const u8 *data, size_t len)
 {
-    if (!vhid_q || !len)
-        return;
-    if (len > VHID_SLOT_SIZE)
-        len = VHID_SLOT_SIZE;
     spin_lock(&vhid_lock);
-    if (vhid_count == VHID_SLOTS) {
-        vhid_drops++;
-    } else {
-        u32 slot = (vhid_head + vhid_count) % VHID_SLOTS;
-        vhid_q[slot].len = len;
-        vhid_q[slot].iface = viface;
-        memcpy(vhid_q[slot].data, data, len);
-        vhid_count++;
-    }
+    dchid_vq_push(&vq, viface, data, len);
     spin_unlock(&vhid_lock);
 }
 
 static void vhid_kick(void)
 {
-    if (vhid_irq_pending || !vhid_count)
+    if (vhid_irq_pending || !vq.count)
         return;
     if (!hv_vgic3_irq_enabled(HV_AVHD_GSIV) || hv_vgic3_get_free_lr() < 0)
         return;
     vhid_irq_pending = true;
+    avhd_tm.injected++;
     hv_vgic3_inject_irq(HV_AVHD_GSIV, hv_vgic3_get_priority(HV_AVHD_GSIV), false, true, false, 0);
 }
 
@@ -239,6 +252,28 @@ static const struct iface *vhid_desc_iface(void)
 {
     int idx = vhid_desc_sel ? mt_idx : kbd_idx;
     return idx >= 0 ? &ifaces[idx] : NULL;
+}
+
+/* DESC_SEL 0 serves the fixed guest keyboard descriptor, 1 the raw multi-touch one. */
+static const u8 *vhid_desc_bytes(u32 *len)
+{
+    const struct iface *i = vhid_desc_iface();
+
+    *len = 0;
+    if (!i || !i->desc_len)
+        return NULL;
+    if (!vhid_desc_sel) {
+        *len = dchid_guest_kbd_desc_len;
+        return dchid_guest_kbd_desc;
+    }
+    *len = i->desc_len;
+    return i->desc;
+}
+
+static void avhd_first(u32 count, const char *what)
+{
+    if (count == 1)
+        printf("dchid: avhd guest %s\n", what);
 }
 
 static u32 window_word(const u8 *buf, size_t len, u64 off)
@@ -263,16 +298,16 @@ static bool avhd_hook(struct exc_info *ctx, u64 addr, u64 *val, bool write, int 
         switch (off) {
             case 0x00c:
                 vhid_irq_pending = false;
+                avhd_first(++avhd_tm.acks, "IRQ ack (driver transport started)");
                 break;
             case 0x010:
                 vhid_desc_sel = *val ? 1 : 0;
+                avhd_tm.sel++;
                 break;
             case 0x028:
+                avhd_first(++avhd_tm.pops, "popped its first report (driver drains input)");
                 spin_lock(&vhid_lock);
-                if (vhid_count) {
-                    vhid_head = (vhid_head + 1) % VHID_SLOTS;
-                    vhid_count--;
-                }
+                dchid_vq_pop(&vq);
                 spin_unlock(&vhid_lock);
                 break;
             default:
@@ -284,32 +319,46 @@ static bool avhd_hook(struct exc_info *ctx, u64 addr, u64 *val, bool write, int 
     u32 v = 0;
     if (off == 0x000) {
         v = HV_AVHD_MAGIC;
+        avhd_first(++avhd_tm.magic, "read MAGIC (AppleMtpInput PrepareHardware ran)");
+        /* A (re)starting driver must not replay keys typed before it existed. */
+        spin_lock(&vhid_lock);
+        dchid_vq_flush(&vq);
+        spin_unlock(&vhid_lock);
     } else if (off == 0x004) {
         v = 1;
     } else if (off == 0x008) {
         v = vhid_status();
+        avhd_first(++avhd_tm.status, "read STATUS (driver readiness poll)");
     } else if (off == 0x014) {
-        const struct iface *i = vhid_desc_iface();
-        v = i ? i->desc_len : 0;
+        vhid_desc_bytes(&v);
+        if (!vhid_desc_sel)
+            avhd_first(++avhd_tm.desc_len, "read keyboard DESC_LEN (loading descriptor)");
     } else if (off == 0x020 || off == 0x024) {
+        if (off == 0x020)
+            avhd_tm.rx_len++;
         spin_lock(&vhid_lock);
-        if (vhid_count)
-            v = off == 0x020 ? vhid_q[vhid_head].len : vhid_q[vhid_head].iface;
+        const struct dchid_vq_slot *cur = dchid_vq_latch(&vq);
+        if (cur)
+            v = off == 0x020 ? cur->len : cur->iface;
         spin_unlock(&vhid_lock);
     } else if (off == 0x02c) {
-        v = vhid_drops;
+        v = vq.drops;
     } else if (off == 0x030) {
         v = vendor_id | ((u32)product_id << 16);
     } else if (off >= 0x040 && off < 0x050) {
         v = window_word(dims, sizeof(dims), off - 0x040);
+        if (off == 0x040)
+            avhd_first(++avhd_tm.dims, "read DIMS (driver loading the trackpad)");
     } else if (off >= 0x400 && off < 0x800) {
-        const struct iface *i = vhid_desc_iface();
-        if (i)
-            v = window_word(i->desc, i->desc_len, off - 0x400);
+        u32 dlen;
+        const u8 *d = vhid_desc_bytes(&dlen);
+        if (d)
+            v = window_word(d, dlen, off - 0x400);
+        avhd_tm.desc_win++;
     } else if (off >= 0x800) {
         spin_lock(&vhid_lock);
-        if (vhid_count)
-            v = window_word(vhid_q[vhid_head].data, vhid_q[vhid_head].len, off - 0x800);
+        if (vq.cur_valid)
+            v = window_word(vq.cur.data, vq.cur.len, off - 0x800);
         spin_unlock(&vhid_lock);
     }
     *val = v;
@@ -346,7 +395,15 @@ static void handle_event(const u8 *p, size_t len)
                 if (info.descriptor_len <= sizeof(i->desc)) {
                     memcpy(i->desc, info.descriptor, info.descriptor_len);
                     i->desc_len = info.descriptor_len;
-                    printf("dchid:   %s HID descriptor %u bytes\n", i->name, i->desc_len);
+                    unsigned int fixed = dchid_fixup_report_size(i->desc, i->desc_len);
+                    printf("dchid:   %s HID descriptor %u bytes (%u oversized report-size items fixed)\n",
+                           i->name, i->desc_len, fixed);
+                    for (u32 o = 0; o < i->desc_len; o += 32) {
+                        printf("dchid:   %s rdesc +%03x:", i->name, o);
+                        for (u32 b = o; b < i->desc_len && b < o + 32; b++)
+                            printf(" %02x", i->desc[b]);
+                        printf("\n");
+                    }
                 } else {
                     printf("dchid:   %s HID descriptor too large (%u)\n", i->name,
                            info.descriptor_len);
@@ -381,6 +438,29 @@ static void handle_event(const u8 *p, size_t len)
     }
 }
 
+/*
+ * Hand the guest exactly what the (J313-validated) Windows decoder accepts:
+ * 38-byte header + num_fingers * 30. Linux accepts reports with spare finger
+ * slots (npoints >= num_fingers) and only looks at buttons bit 0; do the same.
+ */
+static void mt_forward(const u8 *p, size_t len)
+{
+    static u8 buf[DCHID_MT_GUEST_MAX];
+    size_t n = 0;
+    int ret = dchid_mt_sanitize(p, len, buf, sizeof(buf), &n);
+
+    if (ret < 0) {
+        if (mt_bad++ < 4)
+            printf("dchid: trackpad report len %lu (%u fingers) unusable, dropped\n", len,
+                   len > DCHID_MT_NFINGERS_OFFSET ? p[DCHID_MT_NFINGERS_OFFSET] : 0);
+        return;
+    }
+    if (ret > 0 && mt_trimmed++ < 4)
+        printf("dchid: trackpad report len %lu, %u fingers: trimmed to %lu\n", len,
+               p[DCHID_MT_NFINGERS_OFFSET], n);
+    vhid_push(1, buf, n);
+}
+
 static void handle_report(int idx, const u8 *p, size_t len)
 {
     struct iface *i = &ifaces[idx];
@@ -393,10 +473,25 @@ static void handle_report(int idx, const u8 *p, size_t len)
             printf(" %02x", p[n]);
         printf("\n");
     }
-    if (idx == kbd_idx)
-        vhid_push(0, p, len);
+    if (idx == kbd_idx) {
+        /* The guest descriptor only has report 1 (dchid_guest_kbd_desc). */
+        if (len && p[0] == DCHID_KBD_REPORT_ID) {
+            u8 r[DCHID_KBD_REPORT_LEN] = {0};
+            memcpy(r, p, len < sizeof(r) ? len : sizeof(r));
+            /*
+             * Apple ISO keyboards swap the key left of 1 and the one right of
+             * left shift (Linux hid-apple apple_iso_keyboard, APPLE_ISO_TILDE_QUIRK).
+             */
+            if (kbd_iso)
+                dchid_kbd_iso_swap(r);
+            vhid_push(0, r, sizeof(r));
+        } else if (kbd_other_reports++ < 4) {
+            printf("dchid: keyboard report id 0x%02x len %lu not forwarded\n", len ? p[0] : 0,
+                   len);
+        }
+    }
     else if (idx == mt_idx && len && p[0] == DCHID_MT_REPORT_ID)
-        vhid_push(1, p, len);
+        mt_forward(p, len);
 }
 
 static void handle_packet(const struct dchid_hdr *hdr, const u8 *body)
@@ -749,6 +844,30 @@ bool hv_dchid_set_mt_firmware(void *blob, size_t size)
     return true;
 }
 
+/* Same source and table as kboot.c dt_set_ipd() (hid-country-code for Linux). */
+static bool kbd_layout_is_iso(void)
+{
+    int node = adt_path_offset(adt, "/arm-io/dockchannel-mtp/mtp-transport/keyboard");
+    u32 len = 0;
+    const u8 *kblang = node >= 0 ? adt_getprop(adt, node, "kblang-calibration", &len) : NULL;
+
+    if (!kblang || len < 2) {
+        printf("dchid: keyboard layout unknown (no kblang-calibration), no ISO swap\n");
+        return false;
+    }
+    u8 code = kblang[1];
+    /* code 0 is "Unknown": do not guess, an ANSI keyboard would lose its ` key. */
+    bool iso = code && code < ARRAY_SIZE(keyboard_types) && keyboard_types[code] == LAYOUT_ISO;
+    printf("dchid: keyboard layout code %u (%s)%s\n", code,
+           code < ARRAY_SIZE(keyboard_types)
+               ? (keyboard_types[code] == LAYOUT_ISO   ? "ISO"
+                  : keyboard_types[code] == LAYOUT_JIS ? "JIS"
+                                                       : "ANSI")
+               : "?",
+           iso ? ", swapping ` and <> like Linux hid-apple" : "");
+    return iso;
+}
+
 bool hv_dchid_init(void)
 {
     static bool avhd_mapped;
@@ -773,8 +892,12 @@ bool hv_dchid_init(void)
     }
 
     rx_pkt = malloc(DCHID_MAX_PKT + sizeof(struct dchid_hdr));
-    vhid_q = malloc(sizeof(*vhid_q) * VHID_SLOTS);
-    if (!rx_pkt || !vhid_q) {
+    vq.ring[0].cap = VHID_KBD_SLOTS;
+    vq.ring[0].slot = malloc(sizeof(struct dchid_vq_slot) * VHID_KBD_SLOTS);
+    vq.ring[1].cap = VHID_MT_SLOTS;
+    vq.ring[1].slot = malloc(sizeof(struct dchid_vq_slot) * VHID_MT_SLOTS);
+    kbd_iso = kbd_layout_is_iso();
+    if (!rx_pkt || !vq.ring[0].slot || !vq.ring[1].slot) {
         printf("dchid: out of memory\n");
         return false;
     }
@@ -817,6 +940,33 @@ bool hv_dchid_init(void)
 }
 
 /* Hypervisor tick (boot CPU). */
+static void avhd_telemetry(void)
+{
+    u64 now = get_ticks();
+
+    if (ticks_to_msecs(now - avhd_tm_ticks) < 1000)
+        return;
+    avhd_tm_ticks = now;
+    bool en = hv_vgic3_irq_enabled(HV_AVHD_GSIV);
+    if (en != avhd_tm.irq_enabled) {
+        avhd_tm.irq_enabled = en;
+        printf("dchid: avhd guest %s GSIV %d in the vGIC\n", en ? "enabled" : "disabled",
+               HV_AVHD_GSIV);
+    }
+    static u32 seconds;
+    if (++seconds % 10)
+        return;
+    if (!memcmp(&avhd_tm, &avhd_tm_logged, sizeof(avhd_tm)))
+        return;
+    avhd_tm_logged = avhd_tm;
+    printf("dchid: avhd stats magic=%u status=%u desc_len=%u desc_win=%u dims=%u rx_len=%u "
+           "pops=%u acks=%u sel=%u irq_en=%d injected=%u queued=%u drops=%u mt_trim=%u "
+           "mt_bad=%u\n",
+           avhd_tm.magic, avhd_tm.status, avhd_tm.desc_len, avhd_tm.desc_win, avhd_tm.dims,
+           avhd_tm.rx_len, avhd_tm.pops, avhd_tm.acks, avhd_tm.sel, avhd_tm.irq_enabled,
+           avhd_tm.injected, vq.count, vq.drops, mt_trimmed, mt_bad);
+}
+
 void hv_dchid_poll(void)
 {
     if (!dc_up || in_cmd)
@@ -824,4 +974,5 @@ void hv_dchid_poll(void)
     dc_pump();
     process_actions();
     vhid_kick();
+    avhd_telemetry();
 }
