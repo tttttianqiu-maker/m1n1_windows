@@ -43,5 +43,7 @@ void aic_write(u32 reg, u32 val);
 uint32_t aic_ack(void);
 void aic_set_mask(int irq, bool active);
 void aic_set_affinity(int irq, int cpu);
+/* AIC2/3 only (read-only diagnostics): raw input level and mask bit of one IRQ. */
+bool aic_get_state(int irq, bool *hw_level, bool *masked);
 
 #endif

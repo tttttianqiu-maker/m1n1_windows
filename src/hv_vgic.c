@@ -155,10 +155,16 @@ static bool hv_prepare_j313_xhci_darts(void)
 #define DWC3_GUSB2PHYCFG  0xc200
 #define DWC3_GUSB3PIPECTL 0xc2c0
 static u32 j313_dwc3_replays;
+/* Host switch (`j613 usb reset`): Linux-ordered PHY + DWC3 reset at the OS's HCRST. */
+bool hv_usb_ordered_reset;
 static void hv_j313_dwc3_replay_init(void)
 {
     u64 b = J313_XHCI1_BASE;
     u32 before = read32(b + DWC3_GCTL);
+
+    if (j313_dwc3_replays >= 1 && hv_usb_ordered_reset &&
+        usb_guest_port_reset_ordered(b) == 0)
+        goto core_ready;
 
     set32(b + DWC3_GCTL, BIT(11));           /* CORESOFTRESET */
     set32(b + DWC3_GUSB3PIPECTL, BIT(31));   /* PHYSOFTRST */
@@ -173,6 +179,7 @@ static void hv_j313_dwc3_replay_init(void)
     /* SCALEDOWN=0, DISSCRAMBLE=0, PRTCAPDIR=host */
     mask32(b + DWC3_GCTL, (3 << 4) | BIT(3) | (3 << 12), (1 << 12));
     usb_guest_port_phy_host_mode();
+core_ready:
     /*
      * EXP-20261107-037: in Mu the port connect appeared right after the DART bring-up that
      * Mu's first DMA pointer write triggered; Windows never gets one. Redo it for the OS.
@@ -372,6 +379,17 @@ void hv_trace_j313_xhci_tick(void)
     printf(" GCTL=0x%x GSTS=0x%x GUSB2PHYCFG=0x%x GUSB3PIPECTL=0x%x\n",
            read32(J313_XHCI1_BASE + 0xc110), read32(J313_XHCI1_BASE + 0xc118),
            read32(J313_XHCI1_BASE + 0xc200), read32(J313_XHCI1_BASE + 0xc2c0));
+    /*
+     * Does the controller's interrupt line reach the AIC at all? HW_STATE is the raw input
+     * level: 1 with IMAN.IP set and irqs=0 means delivery/mask, 0 means the DWC3 never
+     * raises it.
+     */
+    {
+        const struct hv_irq_route *route = hv_irq_route_from_vintid(857);
+        bool level = false, masked = false;
+        if (route && aic_get_state(route->hw_irq, &level, &masked))
+            printf("HV: xHCI AIC %u hw_level=%d masked=%d\n", route->hw_irq, level, masked);
+    }
     if ((j313_xhci_tick_trace_budget % 4) == 0) {
         usb_guest_port_print_status();
         usb_guest_port_phy_print("tick");

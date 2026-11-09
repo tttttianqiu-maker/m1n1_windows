@@ -213,6 +213,24 @@ void aic_set_mask(int irq, bool active)
                 MASK_BIT(irq));
 }
 
+bool aic_get_state(int irq, bool *hw_level, bool *masked)
+{
+    if (!aic || aic->version < 2 || irq < 0 || !hw_level || !masked)
+        return false;
+    u32 die = irq / aic->max_irq;
+    irq = irq % aic->max_irq;
+    if (die >= aic->nr_die)
+        return false;
+    /* layout per die: IRQ_CFG, SW_SET, SW_CLR, MASK_SET, MASK_CLR, HW_STATE */
+    u64 hw_state = aic->regs.mask_clr + sizeof(u32) * (aic->max_irq >> 5);
+    *masked = read32(aic->base + aic->regs.mask_set + die * aic->intmaskset_stride +
+                     MASK_REG(irq)) &
+              MASK_BIT(irq);
+    *hw_level = read32(aic->base + hw_state + die * aic->intmaskset_stride + MASK_REG(irq)) &
+                MASK_BIT(irq);
+    return true;
+}
+
 void aic_set_affinity(int irq, int cpu){
     if(aic->version != 1)//TODO: check if it can be done on v2+
         return;
