@@ -12,6 +12,7 @@
 #include "hv.h"
 #include "hv_battery.h"
 #include "hv_kbdlight.h"
+#include "wlan.h"
 #include "hv_dchid.h"
 #include "hv_diag.h"
 #include "hv_launch_j313.h"
@@ -521,6 +522,10 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             break;
         case P_HV_KBD_BACKLIGHT:
             reply->retval = hv_kbdlight_setup(request->args[0]) == 0;
+            break;
+        case P_HV_WIFI:
+            /* J613 built-in Wi-Fi bring-up stages (wlan.c); 0 = PCIe link + chip id */
+            reply->retval = request->args[0] == 0 ? wlan_probe() == 0 : 0;
             break;
         case P_HV_FB_MIRROR_CONFIG:
             reply->retval = hv_configure_fb_mirror(request->args[0], request->args[1],
