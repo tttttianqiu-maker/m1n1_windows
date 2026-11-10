@@ -266,6 +266,24 @@ struct dchid_batt_raw {
 void dchid_batt_regs(const struct dchid_batt_raw *raw, u32 seq, u32 regs[DCHID_BATT_NREGS]);
 
 /*
+ * What the guest sees across refreshes. A failed or implausible SMC read never
+ * replaces a good snapshot: a battery that suddenly reads 0 % on battery power
+ * is critical to Windows, which hibernates or shuts down at once. AC state
+ * unknown (CHIS read failed) keeps the last one, and before the first good
+ * read counts as AC (no critical action). A jump of more than
+ * DCHID_BATT_MAX_JUMP points between two reads (60 s apart; a real battery
+ * moves about 2 % a minute at most) is held back twice before it is believed.
+ * Returns true when regs took the new reading.
+ */
+#define DCHID_BATT_MAX_JUMP 20
+struct dchid_batt {
+    u32 regs[DCHID_BATT_NREGS];
+    u32 seq;
+    u32 held; /* consecutive reads kept back */
+};
+bool dchid_batt_update(struct dchid_batt *b, const struct dchid_batt_raw *raw);
+
+/*
  * Guest report queue: one ring per interface (0 keyboard, 1 trackpad), the
  * oldest report dropped on overflow; the guest reads a latched copy of the
  * oldest report and pops it. No locking here (callers hold their lock).

@@ -557,7 +557,8 @@ void dchid_batt_regs(const struct dchid_batt_raw *r, u32 seq, u32 regs[DCHID_BAT
         flags |= DCHID_BATT_CHARGING;
     if (discharging)
         flags |= DCHID_BATT_DISCHARGING;
-    if (discharging && pct <= 5)
+    /* only on battery power: plugged in, Windows' critical action is nothing anyway */
+    if (discharging && !ac && pct <= 5)
         flags |= DCHID_BATT_CRITICAL;
 
     regs[DCHID_BATT_FLG] = flags;
@@ -572,4 +573,31 @@ void dchid_batt_regs(const struct dchid_batt_raw *r, u32 seq, u32 regs[DCHID_BAT
                              : r->ok_volt               ? r->volt
                                                         : 11400;
     regs[DCHID_BATT_PCT] = pct;
+}
+
+bool dchid_batt_update(struct dchid_batt *b, const struct dchid_batt_raw *raw)
+{
+    struct dchid_batt_raw r = *raw;
+    u32 next[DCHID_BATT_NREGS];
+    bool had = b->regs[DCHID_BATT_FLG] & DCHID_BATT_PRESENT;
+
+    if (!r.ok_chis) {
+        r.ok_chis = true;
+        r.chis = had ? !!(b->regs[DCHID_BATT_FLG] & DCHID_BATT_AC) : 1;
+    }
+    dchid_batt_regs(&r, b->seq + 1, next);
+    if (had) {
+        u32 now = next[DCHID_BATT_PCT], was = b->regs[DCHID_BATT_PCT];
+        u32 jump = now > was ? now - was : was - now;
+
+        if (!(next[DCHID_BATT_FLG] & DCHID_BATT_PRESENT) ||
+            (jump > DCHID_BATT_MAX_JUMP && b->held < 2)) {
+            b->held++;
+            return false;
+        }
+    }
+    b->held = 0;
+    b->seq++;
+    memcpy(b->regs, next, sizeof(next));
+    return true;
 }

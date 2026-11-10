@@ -8,7 +8,13 @@
  * touch charging). Each refresh opens the SMC, reads, and quiesces it again,
  * the pattern hv_dchid uses for its GPIO pulses: never leave the SMC RTKit
  * booted without a reader (EXP-20261108-045). First refresh before the guest
- * starts, then every 60 s from the hypervisor tick.
+ * starts, then every 60 s from the hypervisor tick. A failed or implausible
+ * read keeps the last good values (dchid_batt_update): a battery that drops
+ * to 0 % on battery power would make Windows hibernate or shut down at once.
+ *
+ * The guest reads the registers through ACPI (DSDT BAT0/ADP1 OperationRegion
+ * on the AVHD page), so the read counters below show how often Windows polls
+ * _STA/_PSR, _BST and _BIX/_BIF: there is no ACPI notification path yet.
  */
 #include "hv_battery.h"
 #include "dchid_proto.h"
@@ -21,9 +27,14 @@
 #define KEY(a, b, c, d) (((u32)(a) << 24) | ((u32)(b) << 16) | ((u32)(c) << 8) | (u32)(d))
 
 static bool batt_on;
-static u32 batt_regs[DCHID_BATT_NREGS];
-static u32 batt_seq, batt_fail;
-static u64 batt_last;
+static struct dchid_batt batt;
+static u32 batt_fail, batt_held_logs, batt_last_flags;
+static u64 batt_last, batt_boot;
+
+/* guest reads per register (MMIO trap path, any CPU; diagnostic only) */
+static u32 batt_reads[DCHID_BATT_NREGS];
+static u32 batt_reads_logged[3];
+static u64 batt_last_bst;
 
 static void batt_refresh(void)
 {
@@ -46,30 +57,56 @@ static void batt_refresh(void)
     r.ok_cells = !smc_read(smc, KEY('B', 'N', 'C', 'B'), &r.cells, 1);
     smc_shutdown(smc);
 
-    u32 regs[DCHID_BATT_NREGS];
-    dchid_batt_regs(&r, ++batt_seq, regs);
-    memcpy(batt_regs, regs, sizeof(regs));
+    if (!dchid_batt_update(&batt, &r)) {
+        if (batt_held_logs++ < 8)
+            printf("battery: read kept back (BUIC %s %u, FCC %s %u, CHIS %s), Windows keeps "
+                   "%u%% (held %u)\n",
+                   r.ok_buic ? "ok" : "FAILED", r.buic, r.ok_fcc ? "ok" : "FAILED", r.fcc,
+                   r.ok_chis ? "ok" : "FAILED", batt.regs[DCHID_BATT_PCT], batt.held);
+        return;
+    }
 
-    if (batt_seq == 1 || !(batt_seq % 30))
+    const u32 *regs = batt.regs;
+    u32 flags = regs[DCHID_BATT_FLG];
+    if (batt.seq == 1 || !(batt.seq % 30) || flags != batt_last_flags)
         printf("battery: #%u %u%% %s%s%s fcc %u mAh design %u mAh %d mA %u mV cycles %u cells %u "
                "(keys %d%d%d%d%d%d%d%d)\n",
-               batt_seq, regs[DCHID_BATT_PCT],
-               regs[DCHID_BATT_FLG] & DCHID_BATT_PRESENT ? "" : "NOT PRESENT ",
-               regs[DCHID_BATT_FLG] & DCHID_BATT_AC ? "AC " : "battery ",
-               regs[DCHID_BATT_FLG] & DCHID_BATT_CHARGING ? "charging" : "",
-               regs[DCHID_BATT_FCAP], regs[DCHID_BATT_DCAP], r.cur, r.volt, r.cyc, r.cells,
-               r.ok_buic, r.ok_fcc, r.ok_dcap, r.ok_volt, r.ok_cur, r.ok_cyc, r.ok_chis,
-               r.ok_cells);
+               batt.seq, regs[DCHID_BATT_PCT], flags & DCHID_BATT_PRESENT ? "" : "NOT PRESENT ",
+               flags & DCHID_BATT_AC ? "AC " : "battery ",
+               flags & DCHID_BATT_CHARGING ? "charging" : "", regs[DCHID_BATT_FCAP],
+               regs[DCHID_BATT_DCAP], r.cur, r.volt, r.cyc, r.cells, r.ok_buic, r.ok_fcc,
+               r.ok_dcap, r.ok_volt, r.ok_cur, r.ok_cyc, r.ok_chis, r.ok_cells);
+    batt_last_flags = flags;
+}
+
+static void batt_log_reads(void)
+{
+    /* BFLG: _STA, _PSR and _BST; BRCP: _BST only; BDCP: _BIX/_BIF only */
+    u32 now[3] = {batt_reads[DCHID_BATT_FLG], batt_reads[DCHID_BATT_RCAP],
+                  batt_reads[DCHID_BATT_DCAP]};
+
+    if (!memcmp(now, batt_reads_logged, sizeof(now)))
+        return;
+    printf("battery: Windows reads after %lu s: flags %u, _BST %u (last %lu s ago), _BIX %u\n",
+           (unsigned long)(ticks_to_msecs(get_ticks() - batt_boot) / 1000), now[0], now[1],
+           batt_last_bst ? (unsigned long)(ticks_to_msecs(get_ticks() - batt_last_bst) / 1000)
+                         : 0ul,
+           now[2]);
+    memcpy(batt_reads_logged, now, sizeof(now));
 }
 
 void hv_battery_set_mode(bool on)
 {
     batt_on = on;
     printf("battery: Windows battery %s\n", on ? "ON (SMC read-only, 60 s refresh)" : "off");
-    memset(batt_regs, 0, sizeof(batt_regs));
+    memset(&batt, 0, sizeof(batt));
+    memset(batt_reads, 0, sizeof(batt_reads));
+    memset(batt_reads_logged, 0, sizeof(batt_reads_logged));
+    batt_fail = batt_held_logs = batt_last_flags = 0;
+    batt_last_bst = 0;
     if (on) {
         batt_refresh();
-        batt_last = get_ticks();
+        batt_last = batt_boot = get_ticks();
     }
 }
 
@@ -79,10 +116,22 @@ void hv_battery_poll(void)
         return;
     batt_last = get_ticks();
     batt_refresh();
+    batt_log_reads();
 }
 
 u32 hv_battery_reg(u64 offset)
 {
     u64 i = offset / 4;
-    return i < DCHID_BATT_NREGS ? batt_regs[i] : 0;
+
+    if (i >= DCHID_BATT_NREGS)
+        return 0;
+    if (batt_on) {
+        if (!batt_reads[i]++ && (i == DCHID_BATT_FLG || i == DCHID_BATT_RCAP))
+            printf("battery: Windows read %s the first time (%u%%)\n",
+                   i == DCHID_BATT_FLG ? "the battery flags (_STA)" : "_BST",
+                   batt.regs[DCHID_BATT_PCT]);
+        if (i == DCHID_BATT_RCAP)
+            batt_last_bst = get_ticks();
+    }
+    return batt.regs[i];
 }
