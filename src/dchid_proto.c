@@ -622,3 +622,18 @@ bool dchid_batt_update(struct dchid_batt *b, const struct dchid_batt_raw *raw)
     memcpy(b->regs, next, sizeof(next));
     return true;
 }
+
+u32 dchid_batt_events(const u32 old[DCHID_BATT_NREGS], const u32 now[DCHID_BATT_NREGS])
+{
+    u32 ev = 0;
+
+    if ((old[DCHID_BATT_FLG] ^ now[DCHID_BATT_FLG]) & DCHID_BATT_AC)
+        ev |= DCHID_BATT_EVT_PSR;
+    if (old[DCHID_BATT_FLG] != now[DCHID_BATT_FLG] || old[DCHID_BATT_RCAP] != now[DCHID_BATT_RCAP] ||
+        old[DCHID_BATT_RATE] != now[DCHID_BATT_RATE] || old[DCHID_BATT_VOLT] != now[DCHID_BATT_VOLT])
+        ev |= DCHID_BATT_EVT_BST;
+    if (old[DCHID_BATT_DCAP] != now[DCHID_BATT_DCAP] || old[DCHID_BATT_FCAP] != now[DCHID_BATT_FCAP] ||
+        old[DCHID_BATT_CYC] != now[DCHID_BATT_CYC] || old[DCHID_BATT_DVOLT] != now[DCHID_BATT_DVOLT])
+        ev |= DCHID_BATT_EVT_BIX;
+    return ev;
+}

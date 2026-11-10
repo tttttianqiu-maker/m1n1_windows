@@ -258,8 +258,13 @@ enum {
     DCHID_BATT_DVOLT,/* +0x20 design voltage, mV */
     DCHID_BATT_PCT,  /* +0x24 percent */
     DCHID_BATT_SEQ,  /* +0x28 refresh counter */
+    DCHID_BATT_EVT,  /* +0x2c read-to-clear: DCHID_BATT_EVT_* since the last read */
     DCHID_BATT_NREGS
 };
+/* Events for the battery GED (DSDT BGED _EVT -> Notify), vINTID HV_IRQ_SYNTHETIC_BATT_VINTID */
+#define DCHID_BATT_EVT_BST (1u << 0) /* _BST data changed: Notify(BAT0, 0x80) */
+#define DCHID_BATT_EVT_PSR (1u << 1) /* AC plugged/unplugged: Notify(ADP1, 0x80) */
+#define DCHID_BATT_EVT_BIX (1u << 2) /* capacity/cycles changed: Notify(BAT0, 0x81) */
 #define DCHID_BATT_PRESENT     (1u << 0)
 #define DCHID_BATT_AC          (1u << 1)
 #define DCHID_BATT_CHARGING    (1u << 2)
@@ -291,6 +296,8 @@ struct dchid_batt {
     u32 held; /* consecutive reads kept back */
 };
 bool dchid_batt_update(struct dchid_batt *b, const struct dchid_batt_raw *raw);
+/* What changed between two register snapshots, as DCHID_BATT_EVT_* bits. */
+u32 dchid_batt_events(const u32 old[DCHID_BATT_NREGS], const u32 now[DCHID_BATT_NREGS]);
 
 /*
  * Guest report queue: one ring per interface (0 keyboard, 1 trackpad), the

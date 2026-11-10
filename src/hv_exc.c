@@ -2034,8 +2034,10 @@ void hv_exc_irq(struct exc_info *ctx)
     if (!hv_irq_route_resolve_incoming(irq, hv_pci_intx_irq(), &vintid)) {
         static u32 synthetic_collision_logs;
         if (synthetic_collision_logs++ < 16)
-            printf("HV: dropping AIC IRQ %u: collides with a synthetic vINTID (NVMe %u, AVHD %u)\n",
-                   irq, hv_pci_intx_irq(), HV_IRQ_SYNTHETIC_AVHD_VINTID);
+            printf("HV: dropping AIC IRQ %u: collides with a synthetic vINTID (NVMe %u, AVHD %u, "
+                   "battery %u)\n",
+                   irq, hv_pci_intx_irq(), HV_IRQ_SYNTHETIC_AVHD_VINTID,
+                   HV_IRQ_SYNTHETIC_BATT_VINTID);
         aic_set_mask(irq, true);
         return;
     }
