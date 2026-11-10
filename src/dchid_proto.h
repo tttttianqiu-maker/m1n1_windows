@@ -202,6 +202,7 @@ struct dchid_fn_state {
     u8 down[32];     /* keys currently down (bitmap by usage) */
     u8 with_fn[32];  /* ...that went down while Fn was held */
     u16 consumer[2]; /* consumer usages last sent in report 2 */
+    u8 backlight;    /* Fn+F5 (bit 0) / Fn+F6 (bit 1) held */
 };
 void dchid_kbd_fn_translate(struct dchid_fn_state *st, u8 report[DCHID_KBD_REPORT_LEN], bool fn);
 /*
@@ -213,6 +214,14 @@ void dchid_kbd_fn_translate(struct dchid_fn_state *st, u8 report[DCHID_KBD_REPOR
  */
 bool dchid_kbd_fn_media(struct dchid_fn_state *st, u8 report[DCHID_KBD_REPORT_LEN],
                         u8 out[DCHID_CONSUMER_REPORT_LEN]);
+/*
+ * Keyboard backlight keys, only with `j613 kbdlight on` (m1n1 drives the LEDs,
+ * Windows has no keyboard backlight control without a driver): Fn+F5 / Fn+F6
+ * (dictation / do-not-disturb on the M3 Air, nothing in Windows) leave the
+ * keyboard report while held. Returns -1 (F5) or +1 (F6) on a new press, else 0.
+ * After dchid_kbd_fn_translate on the same report.
+ */
+int dchid_kbd_fn_backlight(struct dchid_fn_state *st, u8 report[DCHID_KBD_REPORT_LEN]);
 
 /* MTP trackpad report 0x75 (Linux hid-magicmouse.c struct tp_header / tp_finger). */
 #define DCHID_MT_HDR_SIZE        38

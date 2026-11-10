@@ -11,6 +11,7 @@
 #include "heapblock.h"
 #include "hv.h"
 #include "hv_battery.h"
+#include "hv_kbdlight.h"
 #include "hv_dchid.h"
 #include "hv_diag.h"
 #include "hv_launch_j313.h"
@@ -517,6 +518,9 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_HV_BATTERY_MODE:
             hv_battery_set_mode(request->args[0] != 0);
             reply->retval = 1;
+            break;
+        case P_HV_KBD_BACKLIGHT:
+            reply->retval = hv_kbdlight_setup(request->args[0]) == 0;
             break;
         case P_HV_FB_MIRROR_CONFIG:
             reply->retval = hv_configure_fb_mirror(request->args[0], request->args[1],

@@ -533,6 +533,27 @@ bool dchid_kbd_fn_media(struct dchid_fn_state *st, u8 report[DCHID_KBD_REPORT_LE
     return true;
 }
 
+int dchid_kbd_fn_backlight(struct dchid_fn_state *st, u8 report[DCHID_KBD_REPORT_LEN])
+{
+    u8 held = 0;
+    int w = 3;
+
+    for (int b = 3; b < 9; b++) {
+        u8 k = report[b];
+        if ((k == 0x3e || k == 0x3f) && fn_bit_get(st->with_fn, k)) { /* F5, F6 */
+            held |= k == 0x3e ? 1 : 2;
+            continue;
+        }
+        report[w++] = k;
+    }
+    while (w < 9)
+        report[w++] = 0;
+
+    u8 pressed = held & ~st->backlight;
+    st->backlight = held;
+    return (pressed & 1) ? -1 : (pressed & 2) ? 1 : 0;
+}
+
 void dchid_batt_regs(const struct dchid_batt_raw *r, u32 seq, u32 regs[DCHID_BATT_NREGS])
 {
     for (int i = 0; i < DCHID_BATT_NREGS; i++)

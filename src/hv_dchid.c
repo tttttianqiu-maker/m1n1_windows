@@ -15,6 +15,7 @@
 #include "hv.h"
 #include "hv_mtp.h"
 #include "hv_battery.h"
+#include "hv_kbdlight.h"
 #include "hv_vgic.h"
 #include "keyboard_types.h"
 #include "malloc.h"
@@ -511,6 +512,12 @@ static void handle_report(int idx, const u8 *p, size_t len)
                 dchid_kbd_iso_swap(r);
             /* hid-apple Fn layer: Fn+Backspace = Delete, Fn+arrows = PgUp/PgDn/Home/End */
             dchid_kbd_fn_translate(&kbd_fn, r, fn);
+            /* `j613 kbdlight on`: Fn+F5/F6 dim/brighten the keyboard in m1n1 */
+            if (hv_kbdlight_enabled()) {
+                int step = dchid_kbd_fn_backlight(&kbd_fn, r);
+                if (step)
+                    hv_kbdlight_step(step);
+            }
             /* Fn+F-keys = media keys (report 2); F-keys alone stay F-keys */
             u8 c[DCHID_CONSUMER_REPORT_LEN];
             if (dchid_kbd_fn_media(&kbd_fn, r, c))
