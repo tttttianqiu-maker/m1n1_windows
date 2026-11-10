@@ -172,6 +172,9 @@ unsigned int dchid_fixup_report_size(u8 *desc, size_t len);
  */
 #define DCHID_KBD_REPORT_ID  0x01
 #define DCHID_KBD_REPORT_LEN 10
+/* Consumer Control (media keys) in the same guest descriptor: id + 2 x 16-bit usages */
+#define DCHID_CONSUMER_REPORT_ID  0x02
+#define DCHID_CONSUMER_REPORT_LEN 5
 extern const u8 dchid_guest_kbd_desc[];
 extern const size_t dchid_guest_kbd_desc_len;
 
@@ -197,8 +200,18 @@ bool dchid_hid_scan(const u8 *desc, size_t len, u8 report_id, u32 *input_bits, i
 struct dchid_fn_state {
     u8 down[32];     /* keys currently down (bitmap by usage) */
     u8 with_fn[32];  /* ...that went down while Fn was held */
+    u16 consumer[2]; /* consumer usages last sent in report 2 */
 };
 void dchid_kbd_fn_translate(struct dchid_fn_state *st, u8 report[DCHID_KBD_REPORT_LEN], bool fn);
+/*
+ * Media layer, after dchid_kbd_fn_translate on the same report: F-keys that
+ * went down with Fn become Consumer Control usages (hid-apple's 2021+ table:
+ * F1/F2 brightness, F4 search, F7/F8/F9 previous/play-pause/next, F10 mute,
+ * F11/F12 volume) and leave the keyboard report; F3/F5/F6 stay F-keys.
+ * Returns true when report 2 must be sent; `out` gets it.
+ */
+bool dchid_kbd_fn_media(struct dchid_fn_state *st, u8 report[DCHID_KBD_REPORT_LEN],
+                        u8 out[DCHID_CONSUMER_REPORT_LEN]);
 
 /* MTP trackpad report 0x75 (Linux hid-magicmouse.c struct tp_header / tp_finger). */
 #define DCHID_MT_HDR_SIZE        38

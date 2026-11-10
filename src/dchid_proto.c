@@ -210,6 +210,18 @@ const u8 dchid_guest_kbd_desc[] = {
     0x95, 0x01,       /*   Report Count (1) */
     0x81, 0x02,       /*   Input (Data, Var, Abs) */
     0xc0,             /* End Collection */
+    0x05, 0x0c,       /* Usage Page (Consumer) */
+    0x09, 0x01,       /* Usage (Consumer Control) */
+    0xa1, 0x01,       /* Collection (Application) */
+    0x85, DCHID_CONSUMER_REPORT_ID,
+    0x15, 0x00,       /*   Logical Minimum (0) */
+    0x26, 0xff, 0x03, /*   Logical Maximum (0x3ff) */
+    0x19, 0x00,       /*   Usage Minimum (0) */
+    0x2a, 0xff, 0x03, /*   Usage Maximum (0x3ff) */
+    0x75, 0x10,       /*   Report Size (16) */
+    0x95, 0x02,       /*   Report Count (2) */
+    0x81, 0x00,       /*   Input (Data, Array, Abs): media keys */
+    0xc0,             /* End Collection */
 };
 const size_t dchid_guest_kbd_desc_len = sizeof(dchid_guest_kbd_desc);
 
@@ -471,4 +483,52 @@ void dchid_kbd_fn_translate(struct dchid_fn_state *st, u8 report[DCHID_KBD_REPOR
         st->with_fn[i] &= now[i];
         st->down[i] = now[i];
     }
+}
+
+static u16 fn_media(u8 key)
+{
+    switch (key) {
+        case 0x3a: return 0x070; /* F1  -> Display Brightness Decrement */
+        case 0x3b: return 0x06f; /* F2  -> Display Brightness Increment */
+        case 0x3d: return 0x221; /* F4  -> AC Search */
+        case 0x40: return 0x0b6; /* F7  -> Scan Previous Track */
+        case 0x41: return 0x0cd; /* F8  -> Play/Pause */
+        case 0x42: return 0x0b5; /* F9  -> Scan Next Track */
+        case 0x43: return 0x0e2; /* F10 -> Mute */
+        case 0x44: return 0x0ea; /* F11 -> Volume Decrement */
+        case 0x45: return 0x0e9; /* F12 -> Volume Increment */
+        default: return 0;
+    }
+}
+
+bool dchid_kbd_fn_media(struct dchid_fn_state *st, u8 report[DCHID_KBD_REPORT_LEN],
+                        u8 out[DCHID_CONSUMER_REPORT_LEN])
+{
+    u16 cons[2] = {0, 0};
+    unsigned int n = 0;
+    int w = 3;
+
+    for (int b = 3; b < 9; b++) {
+        u8 k = report[b];
+        u16 u = k >= 4 ? fn_media(k) : 0;
+        if (u && fn_bit_get(st->with_fn, k)) {
+            if (n < 2)
+                cons[n++] = u;
+            continue; /* leaves the keyboard report */
+        }
+        report[w++] = k;
+    }
+    while (w < 9)
+        report[w++] = 0;
+
+    if (cons[0] == st->consumer[0] && cons[1] == st->consumer[1])
+        return false;
+    st->consumer[0] = cons[0];
+    st->consumer[1] = cons[1];
+    out[0] = DCHID_CONSUMER_REPORT_ID;
+    out[1] = cons[0] & 0xff;
+    out[2] = cons[0] >> 8;
+    out[3] = cons[1] & 0xff;
+    out[4] = cons[1] >> 8;
+    return true;
 }

@@ -508,6 +508,10 @@ static void handle_report(int idx, const u8 *p, size_t len)
                 dchid_kbd_iso_swap(r);
             /* hid-apple Fn layer: Fn+Backspace = Delete, Fn+arrows = PgUp/PgDn/Home/End */
             dchid_kbd_fn_translate(&kbd_fn, r, fn);
+            /* Fn+F-keys = media keys (report 2); F-keys alone stay F-keys */
+            u8 c[DCHID_CONSUMER_REPORT_LEN];
+            if (dchid_kbd_fn_media(&kbd_fn, r, c))
+                vhid_push(0, c, sizeof(c));
             vhid_push(0, r, sizeof(r));
         } else if (kbd_other_reports++ < 4) {
             printf("dchid: keyboard report id 0x%02x len %lu not forwarded\n", len ? p[0] : 0,
