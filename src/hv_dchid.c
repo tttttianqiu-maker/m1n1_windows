@@ -116,6 +116,8 @@ static u8 dims[16];
 static DECLARE_SPINLOCK(vhid_lock);
 static struct dchid_vq vq;
 static bool kbd_iso;
+static int kbd_fn_bit = -1;
+static struct dchid_fn_state kbd_fn;
 static u32 mt_trimmed, mt_bad;
 static u32 vhid_desc_sel;
 static bool vhid_irq_pending;
@@ -404,6 +406,21 @@ static void handle_event(const u8 *p, size_t len)
                             printf(" %02x", i->desc[b]);
                         printf("\n");
                     }
+                    if ((int)info.iface == kbd_idx) {
+                        u32 ibits;
+                        int fnb;
+                        if (dchid_hid_scan(i->desc, i->desc_len, DCHID_KBD_REPORT_ID, &ibits,
+                                           &fnb)) {
+                            kbd_fn_bit = fnb;
+                            printf("dchid:   keyboard input report 1: %u bytes (guest layout %u)%s, "
+                                   "Fn %s%d\n",
+                                   1 + (ibits + 7) / 8, DCHID_KBD_REPORT_LEN,
+                                   1 + (ibits + 7) / 8 == DCHID_KBD_REPORT_LEN ? "" : " MISMATCH",
+                                   fnb >= 0 ? "at bit " : "not found ", fnb);
+                        } else {
+                            printf("dchid:   keyboard descriptor did not parse: no Fn layer\n");
+                        }
+                    }
                 } else {
                     printf("dchid:   %s HID descriptor too large (%u)\n", i->name,
                            info.descriptor_len);
@@ -477,6 +494,11 @@ static void handle_report(int idx, const u8 *p, size_t len)
         /* The guest descriptor only has report 1 (dchid_guest_kbd_desc). */
         if (len && p[0] == DCHID_KBD_REPORT_ID) {
             u8 r[DCHID_KBD_REPORT_LEN] = {0};
+            bool fn = false;
+            if (kbd_fn_bit >= 0) {
+                size_t byte = 1 + (size_t)kbd_fn_bit / 8;
+                fn = byte < len && ((p[byte] >> (kbd_fn_bit % 8)) & 1);
+            }
             memcpy(r, p, len < sizeof(r) ? len : sizeof(r));
             /*
              * Apple ISO keyboards swap the key left of 1 and the one right of
@@ -484,6 +506,8 @@ static void handle_report(int idx, const u8 *p, size_t len)
              */
             if (kbd_iso)
                 dchid_kbd_iso_swap(r);
+            /* hid-apple Fn layer: Fn+Backspace = Delete, Fn+arrows = PgUp/PgDn/Home/End */
+            dchid_kbd_fn_translate(&kbd_fn, r, fn);
             vhid_push(0, r, sizeof(r));
         } else if (kbd_other_reports++ < 4) {
             printf("dchid: keyboard report id 0x%02x len %lu not forwarded\n", len ? p[0] : 0,

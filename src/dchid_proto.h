@@ -178,6 +178,28 @@ extern const size_t dchid_guest_kbd_desc_len;
 /* Apple ISO keyboards: swap usages 0x35 and 0x64 (Linux hid-apple apple_iso_keyboard). */
 void dchid_kbd_iso_swap(u8 report[DCHID_KBD_REPORT_LEN]);
 
+/*
+ * Scan a HID report descriptor for input report `report_id`: total input bits
+ * and the bit offset (after the report ID byte) of the 1-bit Apple Fn field,
+ * usage 0x0003 on vendor page 0x00ff, 0xff00 or 0xff01 (Linux hid-apple
+ * apple_input_mapping). *fn_bit is -1 when there is none. False on a
+ * malformed descriptor.
+ */
+bool dchid_hid_scan(const u8 *desc, size_t len, u8 report_id, u32 *input_bits, int *fn_bit);
+
+/*
+ * Fn layer of hid-apple's magic_keyboard_2021_and_2024_fn_keys (used for
+ * BUS_HOST/DockChannel keyboards) without the media keys: Fn+Backspace =
+ * Delete, Fn+Enter = Insert, Fn+Up/Down/Left/Right = PgUp/PgDn/Home/End.
+ * Like hid-apple, a key keeps the meaning it had when it went down, so
+ * releasing Fn first does not turn a held Delete into Backspace.
+ */
+struct dchid_fn_state {
+    u8 down[32];     /* keys currently down (bitmap by usage) */
+    u8 with_fn[32];  /* ...that went down while Fn was held */
+};
+void dchid_kbd_fn_translate(struct dchid_fn_state *st, u8 report[DCHID_KBD_REPORT_LEN], bool fn);
+
 /* MTP trackpad report 0x75 (Linux hid-magicmouse.c struct tp_header / tp_finger). */
 #define DCHID_MT_HDR_SIZE        38
 #define DCHID_MT_FINGER_SIZE     30

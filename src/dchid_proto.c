@@ -309,3 +309,166 @@ void dchid_vq_flush(struct dchid_vq *q)
     q->count = 0;
     q->cur_valid = false;
 }
+
+static u32 hid_item_value(const u8 *p, unsigned int size)
+{
+    u32 v = 0;
+    for (unsigned int i = 0; i < size; i++)
+        v |= (u32)p[i] << (8 * i);
+    return v;
+}
+
+bool dchid_hid_scan(const u8 *desc, size_t len, u8 report_id, u32 *input_bits, int *fn_bit)
+{
+    struct {
+        u32 page, size, count, id;
+    } g = {0, 0, 0, 0}, stack[4];
+    unsigned int sp = 0;
+    /*
+     * Usages of 1-2 bytes take the usage page in effect at the main item
+     * (Linux hid_concatenate_last_usage_page); 4-byte usages carry their own.
+     */
+    u32 usages[16];
+    bool short_usage[16];
+    unsigned int nusages = 0;
+    u32 umin = 0, umax = 0;
+    bool umin_short = false, umax_short = false, range = false;
+    u64 bits = 0;
+    size_t i = 0;
+
+    *input_bits = 0;
+    *fn_bit = -1;
+    if (!desc)
+        return false;
+    while (i < len) {
+        u8 b = desc[i];
+        if (b == 0xfe) { /* long item */
+            if (i + 2 >= len)
+                return false;
+            i += 3 + desc[i + 1];
+            continue;
+        }
+        unsigned int size = (b & 3) == 3 ? 4 : (b & 3);
+        unsigned int type = (b >> 2) & 3, tag = b >> 4;
+        if (i + 1 + size > len)
+            return false;
+        u32 v = hid_item_value(desc + i + 1, size);
+        i += 1 + size;
+
+        if (type == 1) { /* global */
+            switch (tag) {
+                case 0: g.page = v; break;
+                case 7: g.size = v; break;
+                case 8: g.id = v; break;
+                case 9: g.count = v; break;
+                case 10:
+                    if (sp == 4)
+                        return false;
+                    stack[sp++] = g;
+                    break;
+                case 11:
+                    if (!sp)
+                        return false;
+                    g = stack[--sp];
+                    break;
+                default: break;
+            }
+        } else if (type == 2) { /* local */
+            if (tag == 0 && nusages < 16) {
+                usages[nusages] = v;
+                short_usage[nusages++] = size < 4;
+            } else if (tag == 1) {
+                umin = v;
+                umin_short = size < 4;
+                range = true;
+            } else if (tag == 2) {
+                umax = v;
+                umax_short = size < 4;
+                range = true;
+            }
+        } else if (type == 0) { /* main */
+            if (tag == 8 && g.id == report_id) { /* Input */
+                u64 field = (u64)g.size * g.count;
+                if (field > 0x80000)
+                    return false;
+                if (v & 2) { /* variable: one usage per element */
+                    u32 lo = umin_short ? (g.page << 16) | umin : umin;
+                    u32 hi = umax_short ? (g.page << 16) | umax : umax;
+                    for (u32 e = 0; e < g.count && e < 64; e++) {
+                        u32 u;
+                        if (e < nusages)
+                            u = short_usage[e] ? (g.page << 16) | usages[e] : usages[e];
+                        else if (range && lo + e <= hi)
+                            u = lo + e;
+                        else if (nusages)
+                            u = short_usage[nusages - 1] ? (g.page << 16) | usages[nusages - 1]
+                                                         : usages[nusages - 1];
+                        else
+                            u = 0;
+                        u32 page = u >> 16, id = u & 0xffff;
+                        if (g.size == 1 && id == 0x0003 && *fn_bit < 0 &&
+                            (page == 0x00ff || page == 0xff00 || page == 0xff01))
+                            *fn_bit = (int)(bits + (u64)e * g.size);
+                    }
+                }
+                bits += field;
+            }
+            if (tag == 8 || tag == 9 || tag == 10 || tag == 11) {
+                nusages = 0;
+                range = false;
+                umin = umax = 0;
+            }
+        }
+    }
+    if (bits > 0x80000)
+        return false;
+    *input_bits = (u32)bits;
+    return true;
+}
+
+static bool fn_bit_get(const u8 *map, u8 key)
+{
+    return map[key >> 3] & (1 << (key & 7));
+}
+
+static void fn_bit_set(u8 *map, u8 key, bool on)
+{
+    if (on)
+        map[key >> 3] |= 1 << (key & 7);
+    else
+        map[key >> 3] &= ~(1 << (key & 7));
+}
+
+static u8 fn_layer(u8 key)
+{
+    switch (key) {
+        case 0x2a: return 0x4c; /* Backspace -> Delete */
+        case 0x28: return 0x49; /* Enter -> Insert */
+        case 0x52: return 0x4b; /* Up -> Page Up */
+        case 0x51: return 0x4e; /* Down -> Page Down */
+        case 0x50: return 0x4a; /* Left -> Home */
+        case 0x4f: return 0x4d; /* Right -> End */
+        default: return 0;
+    }
+}
+
+void dchid_kbd_fn_translate(struct dchid_fn_state *st, u8 report[DCHID_KBD_REPORT_LEN], bool fn)
+{
+    u8 now[32] = {0};
+
+    for (int b = 3; b < 9; b++) {
+        u8 k = report[b];
+        if (k < 4) /* 0 none, 1-3 error/rollover codes */
+            continue;
+        fn_bit_set(now, k, true);
+        if (!fn_bit_get(st->down, k)) /* new press: remember the Fn state */
+            fn_bit_set(st->with_fn, k, fn);
+        u8 to = fn_layer(k);
+        if (to && fn_bit_get(st->with_fn, k))
+            report[b] = to;
+    }
+    for (unsigned int i = 0; i < sizeof(now); i++) {
+        st->with_fn[i] &= now[i];
+        st->down[i] = now[i];
+    }
+}
