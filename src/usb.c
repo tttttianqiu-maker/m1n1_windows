@@ -662,6 +662,40 @@ void usb_guest_port_phy_refresh(void)
 #define GP_APPLE_CIO_LINK_TIMER    0xcd40
 #define U2_USBCTL_ISOLATION     4
 
+/*
+ * T8122 (M3) only: Linux drivers/phy/apple/atc.c atcphy_usb2_power_on() sets
+ * ATCPHY_EVT_USB2_CTL (PHY "core" block + 0) to EVT_EN | LOAD_CNT after releasing the
+ * USB2 PHY resets, on every power-on; T8103 has no such register. m1n1 finds the USB2 PHY
+ * as ADT atc-phy reg 0; Linux t8122.dtsi puts the core block 0x570000 above it
+ * (0xb02a90000 -> 0xb03000000 for atc-phy1). Only used when the ADT lists that block.
+ */
+#define ATC_EVT_USB2_CTL          0x0
+#define ATC_EVT_USB2_CTL_EVT_EN   BIT(0)
+#define ATC_EVT_USB2_CTL_LOAD_CNT BIT(3)
+
+static u64 usb_atc_core_t8122(u32 idx)
+{
+    char path[sizeof(FMT_ATC_PATH)];
+    int adt_path[8];
+    u64 u2, base, size;
+
+    if (chip_id != T8122)
+        return 0;
+    snprintf(path, sizeof(path), FMT_ATC_PATH, idx);
+    if (adt_path_offset_trace(adt, path, adt_path) < 0 ||
+        adt_get_reg(adt, adt_path, "reg", 0, &u2, NULL) < 0)
+        return 0;
+    for (int i = 1; i < 16; i++) {
+        if (adt_get_reg(adt, adt_path, "reg", i, &base, &size) < 0)
+            break;
+        if (base == u2 + 0x570000)
+            return base;
+    }
+    printf("usb: %s: no ADT reg at 0x%lx (USB2 PHY 0x%lx + 0x570000), EVT step skipped\n", path,
+           u2 + 0x570000, u2);
+    return 0;
+}
+
 int usb_guest_port_reset_ordered(u64 dwc3)
 {
     struct usb_drd_regs r;
@@ -675,7 +709,21 @@ int usb_guest_port_reset_ordered(u64 dwc3)
         printf("usb: ordered reset skipped, PIPE mux 0x%x is not dummy\n", mux);
         return -1;
     }
-    printf("usb: ordered guest-port reset (Linux atcphy order)\n");
+    u64 core = usb_atc_core_t8122(1);
+    printf("usb: ordered guest-port reset (Linux atcphy order%s)\n",
+           core ? ", T8122 EVT_USB2_CTL" : "");
+    if (core) {
+        /* read-only: ATC core power state of the guest port and of m1n1's own port 0
+           (Linux atcphy_power_on wakes it: ATCPHY_POWER_CTRL/STAT/MISC at +0x20000) */
+        u64 core0 = usb_atc_core_t8122(0);
+        printf("usb: atc1 core 0x%lx EVT=0x%x PWR_CTRL=0x%x PWR_STAT=0x%x MISC=0x%x\n", core,
+               read32(core), read32(core + 0x20000), read32(core + 0x20004),
+               read32(core + 0x20008));
+        if (core0)
+            printf("usb: atc0 core 0x%lx EVT=0x%x PWR_CTRL=0x%x PWR_STAT=0x%x MISC=0x%x\n", core0,
+                   read32(core0), read32(core0 + 0x20000), read32(core0 + 0x20004),
+                   read32(core0 + 0x20008));
+    }
     iodev_console_flush();
 
     /* 1. DWC3 into reset with its clamps on */
@@ -706,6 +754,12 @@ int usb_guest_port_reset_ordered(u64 dwc3)
     udelay(10);
     clear32(u2 + U2_CTL, U2_CTL_PORT_RESET);
     udelay(10);
+    if (core) {
+        u32 evt = read32(core + ATC_EVT_USB2_CTL);
+        set32(core + ATC_EVT_USB2_CTL, ATC_EVT_USB2_CTL_LOAD_CNT | ATC_EVT_USB2_CTL_EVT_EN);
+        udelay(10);
+        printf("usb: T8122 EVT_USB2_CTL 0x%x -> 0x%x\n", evt, read32(core + ATC_EVT_USB2_CTL));
+    }
     set32(u2 + U2_CTL, U2_CTL_APB_RESETN);
     udelay(10);
     clear32(u2 + U2_MISCTUNE, U2_MISCTUNE_GATES);
