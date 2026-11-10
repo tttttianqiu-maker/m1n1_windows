@@ -24,6 +24,8 @@ struct hv_irq_route {
 #define HV_IRQ_SYNTHETIC_AVHD_VINTID 65u
 /* J613 battery events (GED ACPI0013 "BGED" in the DSDT, hv_battery.c); never a hardware route. */
 #define HV_IRQ_SYNTHETIC_BATT_VINTID 66u
+/* J613 Wi-Fi for the guest: INTA of the virtio-net 00:01.0 (DSDT PCI0 _PRT, hv_vnet.c). */
+#define HV_IRQ_SYNTHETIC_VNET_VINTID 67u
 
 const struct hv_irq_route *hv_irq_route_from_hw(u32 hw_irq);
 const struct hv_irq_route *hv_irq_route_from_vintid(u32 vintid);

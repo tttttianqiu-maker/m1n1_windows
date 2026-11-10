@@ -16,6 +16,7 @@
 #include "hv.h"
 #include "hv_runtime_diag.h"
 #include "hv_pci_state.h"
+#include "hv_vnet.h"
 #include "iodev.h"
 #include "types.h"
 #include "utils.h"
@@ -163,6 +164,19 @@ static bool handle_pci_cfg(struct exc_info *ctx, u64 addr, u64 *val, bool write,
     if (bus == 0 && dev == 0 && fn == 0)
         HV_RUNTIME_TRACE("HV: PCI cfg 00:00.0 reg=0x%03x w=%d width=%d val=0x%lx\n", reg,
                          write, bytes, write ? *val : 0);
+
+    // 00:01.0: the virtio-net function backed by the built-in Wi-Fi (hv_vnet.c), present
+    // only once m1n1 has the Wi-Fi up (J613 `j613 wifi boot`).
+    if (bus == 0 && dev == 1 && fn == 0 && hv_vnet_present()) {
+        if (write) {
+            hv_vnet_cfg_write(reg, boff, bytes, *val);
+        } else {
+            u32 dw = hv_vnet_cfg_read(reg);
+            u32 m = (bytes >= 4) ? 0xFFFFFFFFu : ((1u << (bytes * 8)) - 1);
+            *val = (dw >> (boff * 8)) & m;
+        }
+        return true;
+    }
 
     // Only 00:00.0 exists. Any other BDF reads as all-ones ("no device present"); a missing
     // all-ones default here makes the enumerator probe empty space forever.

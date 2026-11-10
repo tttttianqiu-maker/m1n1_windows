@@ -26,6 +26,7 @@
 #include "hv_vgic.h"
 #include "hv_vgic_diag.h"
 #include "hv_vgic_redist.h"
+#include "hv_vnet.h"
 #include "assert.h"
 #include "cpu_regs.h"
 #include "display.h"
@@ -2458,6 +2459,7 @@ void hv_vgic3_do_eoir1(u64 reg){
     hv_vgic3_drain_irq_queue();
     hv_vgic3_update_vi();
     hv_nvme_irq_eoi(intd);
+    hv_vnet_irq_eoi(intd);
     u32 hw_irq;
     bool enabled = distributor->gicd_interrupt_set_enable_regs[intd / 32] & BIT(intd % 32);
     if (hv_irq_route_level_eoi_target(intd, enabled, &hw_irq))

@@ -23,6 +23,7 @@
 #include "adt.h"
 #include "brcm.h"
 #include "brcm_msgbuf.h"
+#include "hv_vnet.h"
 #include "pcie.h"
 #include "smc.h"
 #include "string.h"
@@ -362,6 +363,11 @@ int wlan_boot(const struct brcm_fw_set *fw)
     brcm_console_poll();
     printf("wlan: dongle init %s\n", ret == 0 ? "OK" : "FAILED");
     wifi_up = ret == 0;
+    if (wifi_up) {
+        /* Windows gets the Wi-Fi as virtio-net 00:01.0; frames go straight to it */
+        hv_vnet_init(brcm_mac);
+        brcm_set_callbacks(hv_vnet_rx, NULL);
+    }
     return ret;
 }
 
@@ -394,6 +400,7 @@ void wlan_poll(void)
     if (was_link != (l->link && l->keyed)) {
         was_link = l->link && l->keyed;
         printf("wlan: link %s (reason %u)\n", was_link ? "UP" : "DOWN", l->last_reason);
+        hv_vnet_set_link(was_link);
     }
     if (ticks_to_msecs(now - last_log) >= 60000) {
         last_log = now;

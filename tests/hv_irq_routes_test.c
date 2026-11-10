@@ -33,6 +33,10 @@ int main(void)
     /* AIC IRQ 65 must never alias the J613 AVHD virtual interrupt */
     assert(!hv_irq_route_resolve_incoming(HV_IRQ_SYNTHETIC_AVHD_VINTID, 64, &vintid));
     assert(!hv_irq_route_register(200, HV_IRQ_SYNTHETIC_AVHD_VINTID, false));
+    /* ... nor the battery GED, nor the Wi-Fi virtio-net INTx */
+    assert(!hv_irq_route_resolve_incoming(HV_IRQ_SYNTHETIC_BATT_VINTID, 64, &vintid));
+    assert(!hv_irq_route_resolve_incoming(HV_IRQ_SYNTHETIC_VNET_VINTID, 64, &vintid));
+    assert(!hv_irq_route_register(201, HV_IRQ_SYNTHETIC_VNET_VINTID, true));
     assert(vintid == 123);
     assert(hv_irq_route_resolve_incoming(857, 64, &vintid));
     assert(vintid == 857);

@@ -20,6 +20,7 @@
 #include "uartproxy.h"
 #include "hv_vgic.h"
 #include "hv_vgic_diag.h"
+#include "hv_vnet.h"
 #include "aic.h"
 #include "aic_regs.h"
 #include "adt.h"
@@ -1788,6 +1789,7 @@ static void hv_exc_exit(struct exc_info *ctx)
 {
     hv_wdt_breadcrumb('x');
     hv_nvme_poll_irq();
+    hv_vnet_poll_irq();
     hv_update_fiq();
     /* reenable PMU counters */
     reg_set(SYS_IMP_APL_PMCR0, PERCPU(exc_entry_pmcr0_cnt));
@@ -2035,9 +2037,9 @@ void hv_exc_irq(struct exc_info *ctx)
         static u32 synthetic_collision_logs;
         if (synthetic_collision_logs++ < 16)
             printf("HV: dropping AIC IRQ %u: collides with a synthetic vINTID (NVMe %u, AVHD %u, "
-                   "battery %u)\n",
+                   "battery %u, Wi-Fi %u)\n",
                    irq, hv_pci_intx_irq(), HV_IRQ_SYNTHETIC_AVHD_VINTID,
-                   HV_IRQ_SYNTHETIC_BATT_VINTID);
+                   HV_IRQ_SYNTHETIC_BATT_VINTID, HV_IRQ_SYNTHETIC_VNET_VINTID);
         aic_set_mask(irq, true);
         return;
     }

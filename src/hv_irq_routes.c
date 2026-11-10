@@ -78,7 +78,7 @@ bool hv_irq_route_resolve_incoming(u32 hw_irq, u32 reserved_vintid, u32 *vintid)
     u32 candidate = route ? route->vintid : hw_irq;
 
     if (!vintid || candidate == reserved_vintid || candidate == HV_IRQ_SYNTHETIC_AVHD_VINTID ||
-        candidate == HV_IRQ_SYNTHETIC_BATT_VINTID)
+        candidate == HV_IRQ_SYNTHETIC_BATT_VINTID || candidate == HV_IRQ_SYNTHETIC_VNET_VINTID)
         return false;
 
     *vintid = candidate;
@@ -100,7 +100,7 @@ bool hv_irq_route_register(u32 hw_irq, u32 vintid, bool level)
 {
     if (hw_irq < 32 || hw_irq > 1019 || vintid < 32 || vintid > 1019 ||
         vintid == HV_IRQ_SYNTHETIC_NVME_VINTID || vintid == HV_IRQ_SYNTHETIC_AVHD_VINTID ||
-        vintid == HV_IRQ_SYNTHETIC_BATT_VINTID ||
+        vintid == HV_IRQ_SYNTHETIC_BATT_VINTID || vintid == HV_IRQ_SYNTHETIC_VNET_VINTID ||
         dynamic_route_count >= HV_IRQ_DYNAMIC_ROUTE_CAPACITY ||
         hv_irq_route_from_hw(hw_irq) || hv_irq_route_from_vintid(vintid))
         return false;
