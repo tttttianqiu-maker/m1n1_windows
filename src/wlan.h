@@ -21,8 +21,25 @@ struct wlan_pci {
     bool up;
 };
 
-/* Stage 2 probe: PCIe link up, enumerate 01:00.0, read the chip id. Logs "wlan: ...". */
-int wlan_probe(void);
+/* What the probe found, for the host (run_uefi.py picks the firmware files with it). */
+struct wlan_info {
+    u32 magic; /* WLAN_INFO_MAGIC once filled */
+    u16 device, chip;
+    u8 chiprev, up, attached, otp_valid;
+    u32 rambase, ramsize;
+    char module[16], vendor[16], version[16]; /* Apple OTP (brcmfmac naming) */
+};
+#define WLAN_INFO_MAGIC 0x4e414c57 /* "WLAN" */
+
+struct brcm_fw_set;
+
+/*
+ * Probe: PCIe link up, enumerate 01:00.0, chip id, then the Broadcom core scan, reset,
+ * RAM size and OTP (brcm.c). Fills *info when given. Logs "wlan: ...".
+ */
+int wlan_probe(struct wlan_info *info);
+/* Firmware boot (probes first if needed), then a short look at the firmware console. */
+int wlan_boot(const struct brcm_fw_set *fw);
 const struct wlan_pci *wlan_pci(void);
 
 #endif

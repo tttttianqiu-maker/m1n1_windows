@@ -524,8 +524,14 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             reply->retval = hv_kbdlight_setup(request->args[0]) == 0;
             break;
         case P_HV_WIFI:
-            /* J613 built-in Wi-Fi bring-up stages (wlan.c); 0 = PCIe link + chip id */
-            reply->retval = request->args[0] == 0 ? wlan_probe() == 0 : 0;
+            /* J613 built-in Wi-Fi (wlan.c): 0 = probe (args[1]: optional struct wlan_info *
+               the host reads back), 1 = firmware boot (args[1]: struct brcm_fw_set *) */
+            if (request->args[0] == 0)
+                reply->retval = wlan_probe((struct wlan_info *)request->args[1]) == 0;
+            else if (request->args[0] == 1)
+                reply->retval = wlan_boot((const struct brcm_fw_set *)request->args[1]) == 0;
+            else
+                reply->retval = 0;
             break;
         case P_HV_FB_MIRROR_CONFIG:
             reply->retval = hv_configure_fb_mirror(request->args[0], request->args[1],

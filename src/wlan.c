@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * J613 built-in Wi-Fi, stage 2: PCIe link to the Broadcom BCM4388 and its chip id.
+ * J613 built-in Wi-Fi: PCIe link to the Broadcom BCM4388, chip id, then brcm.c on top.
  *
- * Windows has no driver for Apple's Broadcom Wi-Fi, so m1n1 will run the chip itself
- * (FullMAC, like Linux brcmfmac) and give the guest a virtual network card. This file
- * brings up the PCIe port the chip sits on and identifies it; the firmware boot comes next.
+ * Windows has no driver for Apple's Broadcom Wi-Fi, so m1n1 runs the chip itself
+ * (FullMAC, like Linux brcmfmac) and gives the guest a virtual network card. This file
+ * brings up the PCIe port the chip sits on and identifies it; brcm.c attaches to the
+ * chip (cores, reset, RAM, OTP) and boots the firmware the host hands over.
  *
  * Hardware, from Linux (Asahi) device trees: t8122.dtsi pcie0 (ECAM 0x580000000, port0
  * PERST# = pinctrl_ap GPIO 187 active low, DART pcie0_dart stream 1 for bus 1,
@@ -16,10 +17,11 @@
  * ready, LTSSM start, link up. The chip id read follows brcmfmac (BAR0 window at config
  * 0x80 onto the backplane enumeration base 0x18000000).
  *
- * Opt-in (`j613 wifi probe` -> P_HV_WIFI); everything is logged as "wlan: ...".
+ * Opt-in (`j613 wifi probe|boot` -> P_HV_WIFI); everything is logged as "wlan: ...".
  */
 #include "wlan.h"
 #include "adt.h"
+#include "brcm.h"
 #include "pcie.h"
 #include "smc.h"
 #include "string.h"
@@ -271,14 +273,17 @@ static void read_chip_id(void)
            ((cid >> 28) & 0xf) == 1 ? "AXI" : "SB?", window);
 }
 
-int wlan_probe(void)
+static bool attached;
+
+static int probe(void)
 {
     memset(&wp, 0, sizeof(wp));
+    attached = false;
     if (chip_id != T8122) {
         printf("wlan: only wired up for T8122 (J613)\n");
         return -1;
     }
-    printf("wlan: stage 2 probe (PCIe link + chip id)\n");
+    printf("wlan: probe (PCIe link, chip id, cores, OTP)\n");
     if (pcie_init() < 0) {
         printf("wlan: pcie_init failed\n");
         return -1;
@@ -291,6 +296,57 @@ int wlan_probe(void)
         return -1;
     read_chip_id();
     wp.up = wp.chip == 0x4388;
-    printf("wlan: probe %s\n", wp.up ? "OK (BCM4388)" : "found an unexpected chip");
-    return wp.up ? 0 : -1;
+    printf("wlan: chip id %s\n", wp.up ? "OK (BCM4388)" : "unexpected");
+    if (!wp.up)
+        return -1;
+    if (brcm_attach(&wp) < 0) {
+        printf("wlan: Broadcom attach failed\n");
+        return -1;
+    }
+    attached = true;
+    printf("wlan: probe OK\n");
+    return 0;
+}
+
+int wlan_probe(struct wlan_info *info)
+{
+    int ret = probe();
+    if (info) {
+        const struct brcm_otp *otp = brcm_otp();
+        memset(info, 0, sizeof(*info));
+        info->device = wp.device;
+        info->chip = wp.chip;
+        info->chiprev = wp.chiprev;
+        info->up = wp.up;
+        info->attached = attached;
+        if (attached) {
+            brcm_raminfo(&info->rambase, &info->ramsize);
+            info->otp_valid = otp->valid;
+            if (otp->valid) {
+                memcpy(info->module, otp->module, sizeof(info->module));
+                memcpy(info->vendor, otp->vendor, sizeof(info->vendor));
+                memcpy(info->version, otp->version, sizeof(info->version));
+            }
+        }
+        info->magic = WLAN_INFO_MAGIC;
+    }
+    return ret;
+}
+
+int wlan_boot(const struct brcm_fw_set *fw)
+{
+    if (!attached && probe() < 0)
+        return -1;
+    if (!fw) {
+        printf("wlan: no firmware set\n");
+        return -1;
+    }
+    int ret = brcm_boot(fw);
+    /* whatever the firmware printed while starting (or before it died) */
+    for (int i = 0; i < 10; i++) {
+        mdelay(50);
+        brcm_console_poll();
+    }
+    printf("wlan: firmware boot %s\n", ret == 0 ? "OK" : "FAILED");
+    return ret;
 }

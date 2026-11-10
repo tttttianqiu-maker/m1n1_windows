@@ -1117,9 +1117,10 @@ class M1N1Proxy(Reloadable):
     def hv_battery_mode(self, enable):
         # J613: SMC battery keys (read-only) -> ACPI BAT0/ADP1 via the AVHD page.
         return self.request(self.P_HV_BATTERY_MODE, 1 if enable else 0)
-    def hv_wifi(self, stage):
-        # J613 built-in Wi-Fi bring-up (m1n1 wlan.c); 0 = PCIe link + chip id probe.
-        return self.request(self.P_HV_WIFI, stage)
+    def hv_wifi(self, stage, arg=0):
+        # J613 built-in Wi-Fi (m1n1 wlan.c): 0 = probe (arg: optional struct wlan_info
+        # buffer, filled for the host), 1 = firmware boot (arg: struct brcm_fw_set).
+        return self.request(self.P_HV_WIFI, stage, arg)
     def hv_kbd_backlight(self, level):
         # J613: keyboard backlight via fpwm1 at `level` (0 off .. 8 max); Fn+F5/F6 step it.
         return self.request(self.P_HV_KBD_BACKLIGHT, level)
