@@ -525,11 +525,14 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             break;
         case P_HV_WIFI:
             /* J613 built-in Wi-Fi (wlan.c): 0 = probe (args[1]: optional struct wlan_info *
-               the host reads back), 1 = firmware boot (args[1]: struct brcm_fw_set *) */
+               the host reads back), 1 = firmware boot + rings + dongle init (args[1]:
+               struct brcm_fw_set *), 2 = WPA2 join (args[1]: struct wlan_net *) */
             if (request->args[0] == 0)
                 reply->retval = wlan_probe((struct wlan_info *)request->args[1]) == 0;
             else if (request->args[0] == 1)
                 reply->retval = wlan_boot((const struct brcm_fw_set *)request->args[1]) == 0;
+            else if (request->args[0] == 2)
+                reply->retval = wlan_join((const struct wlan_net *)request->args[1]) == 0;
             else
                 reply->retval = 0;
             break;

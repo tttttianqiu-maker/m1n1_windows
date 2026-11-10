@@ -22,6 +22,7 @@
 #include "wlan.h"
 #include "adt.h"
 #include "brcm.h"
+#include "brcm_msgbuf.h"
 #include "pcie.h"
 #include "smc.h"
 #include "string.h"
@@ -333,8 +334,11 @@ int wlan_probe(struct wlan_info *info)
     return ret;
 }
 
+static bool wifi_up;
+
 int wlan_boot(const struct brcm_fw_set *fw)
 {
+    wifi_up = false;
     if (!attached && probe() < 0)
         return -1;
     if (!fw) {
@@ -348,5 +352,56 @@ int wlan_boot(const struct brcm_fw_set *fw)
         brcm_console_poll();
     }
     printf("wlan: firmware boot %s\n", ret == 0 ? "OK" : "FAILED");
+    if (ret)
+        return ret;
+    if (brcm_msgbuf_init() < 0) {
+        printf("wlan: ring setup FAILED\n");
+        return -1;
+    }
+    ret = brcm_dongle_init(fw);
+    brcm_console_poll();
+    printf("wlan: dongle init %s\n", ret == 0 ? "OK" : "FAILED");
+    wifi_up = ret == 0;
     return ret;
+}
+
+int wlan_join(const struct wlan_net *net)
+{
+    if (!wifi_up) {
+        printf("wlan: Wi-Fi not up, not joining\n");
+        return -1;
+    }
+    if (!net || net->magic != WLAN_NET_MAGIC || !net->ssid_len || net->ssid_len > 32 ||
+        net->pass_len > 63) {
+        printf("wlan: bad network description\n");
+        return -1;
+    }
+    return brcm_join(net->ssid, net->ssid_len, net->pmk, net->pass, net->pass_len);
+}
+
+void wlan_poll(void)
+{
+    static u64 last, last_log;
+    static bool was_link;
+    if (!wifi_up)
+        return;
+    u64 now = get_ticks();
+    if (ticks_to_usecs(now - last) < 1000)
+        return;
+    last = now;
+    brcm_poll();
+    const struct brcm_link *l = brcm_link_state();
+    if (was_link != (l->link && l->keyed)) {
+        was_link = l->link && l->keyed;
+        printf("wlan: link %s (reason %u)\n", was_link ? "UP" : "DOWN", l->last_reason);
+    }
+    if (ticks_to_msecs(now - last_log) >= 60000) {
+        last_log = now;
+        printf("wlan: status: link %s, rx %lu frames / %lu bytes (%lu dropped), tx %lu "
+               "(%lu errors, %lu dropped), %u events\n",
+               (l->link && l->keyed) ? "up" : "down", (unsigned long)l->rx_frames,
+               (unsigned long)l->rx_bytes, (unsigned long)l->rx_dropped,
+               (unsigned long)l->tx_frames, (unsigned long)l->tx_errors,
+               (unsigned long)l->tx_dropped, l->events);
+    }
 }

@@ -7,7 +7,11 @@
 #ifndef BRCM_PRIV_H
 #define BRCM_PRIV_H
 
+#ifdef BRCM_HOST_TEST
+#include "brcm_host_test.h" /* tests/c: host build of the protocol code */
+#else
 #include "types.h"
+#endif
 
 /* PCI config space of the device */
 #define BRCM_CFG_BAR0_WINDOW         0x80

@@ -33,13 +33,30 @@ struct wlan_info {
 
 struct brcm_fw_set;
 
+/* Network to join, from the host (`j613 wifi "<name>" "<password>"`; the host derives the
+   WPA2 PMK with PBKDF2-SHA1 like wpa_supplicant does). */
+struct wlan_net {
+    u32 magic; /* WLAN_NET_MAGIC */
+    u32 ssid_len;
+    u8 ssid[32];
+    u8 pmk[32];
+    u32 pass_len;
+    char pass[64];
+};
+#define WLAN_NET_MAGIC 0x54454e57 /* "WNET" */
+
 /*
  * Probe: PCIe link up, enumerate 01:00.0, chip id, then the Broadcom core scan, reset,
  * RAM size and OTP (brcm.c). Fills *info when given. Logs "wlan: ...".
  */
 int wlan_probe(struct wlan_info *info);
-/* Firmware boot (probes first if needed), then a short look at the firmware console. */
+/* Firmware boot (probes first if needed), rings + ioctl channel, dongle init (MAC, CLM,
+   TxCap, calibration, version, events, interface up). */
 int wlan_boot(const struct brcm_fw_set *fw);
+/* WPA2-PSK join; waits up to ~30 s for link + keys. */
+int wlan_join(const struct wlan_net *net);
+/* from hv_tick: service the chip while the guest runs */
+void wlan_poll(void);
 const struct wlan_pci *wlan_pci(void);
 
 #endif
