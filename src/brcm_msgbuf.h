@@ -49,7 +49,10 @@ int brcm_msgbuf_init(void);
 void brcm_poll(void);
 /* synchronous dongle ioctl through the control ring; 0 or the firmware's (negative) error */
 int brcm_ioctl(u32 cmd, void *buf, u32 len, u32 *resp_len);
-/* one 802.3 frame out through the STA flowring (created on first use) */
+/* one 802.3 frame out through the STA flowring (created on first use): 0 = queued to the
+   chip, -1 = dropped (no link, bad frame, flowring refused), BRCM_TX_BUSY = no room right
+   now (flowring being created, all TX buffers in flight, ring full): keep it, retry later */
+#define BRCM_TX_BUSY (-2)
 int brcm_tx(const u8 *frame, u32 len);
 const struct brcm_link *brcm_link_state(void);
 /* forget association state before a new join */

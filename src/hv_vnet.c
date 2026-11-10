@@ -121,7 +121,8 @@ static struct {
     u32 isr;              /* atomic */
     bool irq_outstanding; /* atomic: injected, not EOId yet */
     /* stats */
-    u64 rx, rx_bytes, rx_nobuf, rx_notready, rx_bad, tx, tx_bytes, tx_dropped, tx_bad, irqs;
+    u64 rx, rx_bytes, rx_nobuf, rx_notready, rx_bad, tx, tx_bytes, tx_dropped, tx_bad, tx_busy, irqs;
+    bool tx_pending; /* TX entries left in the ring (chip busy): retry from hv_vnet_poll */
     u64 last_log;
 } vn;
 
@@ -373,17 +374,28 @@ static void process_tx(void)
                 break;
             i = d.next;
         }
-        q->last_avail++;
-        push_used(q, head, 0);
-        used = true;
+        int r = -1;
         if (!ok || len < HDR_LEN + 14) {
             vn.tx_bad++;
-        } else if (!(vn.link & LINK_UP) || brcm_tx(frame_buf + HDR_LEN, len - HDR_LEN)) {
+        } else if (!(vn.link & LINK_UP)) {
+            vn.tx_dropped++;
+        } else if ((r = brcm_tx(frame_buf + HDR_LEN, len - HDR_LEN)) == BRCM_TX_BUSY) {
+            /* the chip has no room: leave the frame in the guest's ring (flow control),
+               hv_vnet_poll retries every tick */
+            vn.tx_pending = true;
+            vn.tx_busy++;
+            break;
+        } else if (r) {
             vn.tx_dropped++;
         } else {
             vn.tx++;
             vn.tx_bytes += len - HDR_LEN;
         }
+        q->last_avail++;
+        push_used(q, head, 0);
+        used = true;
+        if (guard + 1 == q->size)
+            vn.tx_pending = true; /* more than a ring's worth: continue next tick */
     }
     if (used)
         queue_interrupt(q);
@@ -686,15 +698,20 @@ void hv_vnet_poll(void)
 {
     if (!vn.present)
         return;
+    if (vn.tx_pending) {
+        vn.tx_pending = false;
+        process_tx();
+    }
     hv_vnet_poll_irq();
     if (ticks_to_msecs(get_ticks() - vn.last_log) < 60000)
         return;
     vn.last_log = get_ticks();
     printf("vnet: guest %s, link %s, rx %lu (%lu bytes; dropped: %lu no buffer, %lu not ready, "
-           "%lu bad), tx %lu (%lu bytes; %lu dropped, %lu bad), %lu interrupts\n",
+           "%lu bad), tx %lu (%lu bytes; %lu dropped, %lu bad, %lu waits for the chip), "
+           "%lu interrupts\n",
            (vn.status & S_DRIVER_OK) ? "driver up" : "no driver", (vn.link & LINK_UP) ? "up" : "down",
            (unsigned long)vn.rx, (unsigned long)vn.rx_bytes, (unsigned long)vn.rx_nobuf,
            (unsigned long)vn.rx_notready, (unsigned long)vn.rx_bad, (unsigned long)vn.tx,
            (unsigned long)vn.tx_bytes, (unsigned long)vn.tx_dropped, (unsigned long)vn.tx_bad,
-           (unsigned long)vn.irqs);
+           (unsigned long)vn.tx_busy, (unsigned long)vn.irqs);
 }

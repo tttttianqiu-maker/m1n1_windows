@@ -144,6 +144,7 @@ static void dart_check(const char *when)
 #define MSGBUF_TYPE_RING_STATUS            0x2
 #define MSGBUF_TYPE_FLOW_RING_CREATE       0x3
 #define MSGBUF_TYPE_FLOW_RING_CREATE_CMPLT 0x4
+#define MSGBUF_TYPE_FLOW_RING_DELETE       0x5
 #define MSGBUF_TYPE_FLOW_RING_DELETE_CMPLT 0x6
 #define MSGBUF_TYPE_IOCTLPTR_REQ           0x9
 #define MSGBUF_TYPE_IOCTLPTR_REQ_ACK       0xA
@@ -206,7 +207,8 @@ static struct ring rings[NR_COMMON];
 static struct ring flowring;
 static u16 max_flowrings, max_submission, max_completion;
 static u32 flow_h2d_w_idx, flow_h2d_r_idx;
-static enum { FLOW_NONE, FLOW_CREATING, FLOW_OPEN, FLOW_FAILED } flow_state;
+static enum { FLOW_NONE, FLOW_CREATING, FLOW_OPEN, FLOW_DELETING, FLOW_FAILED } flow_state;
+static u64 flow_t0;
 
 static void ring_bell(void)
 {
@@ -312,6 +314,12 @@ struct msg_tx_post {
     u32 rsvd0;
 } PACKED;
 
+struct msg_flowring_delete {
+    struct msg_hdr msg;
+    u16 flow_ring_id, reason;
+    u32 rsvd0[7];
+} PACKED;
+
 struct msg_flowring_create {
     struct msg_hdr msg;
     u8 da[6], sa[6];
@@ -339,6 +347,7 @@ _Static_assert(sizeof(struct msg_ctl_bufpost) == 40, "ctl bufpost");
 _Static_assert(sizeof(struct msg_rx_complete) == 32, "rx complete");
 _Static_assert(sizeof(struct msg_tx_post) == 48, "tx post");
 _Static_assert(sizeof(struct msg_flowring_create) == 40, "flowring create");
+_Static_assert(sizeof(struct msg_flowring_delete) == 40, "flowring delete");
 _Static_assert(sizeof(struct msg_h2d_mb) == 40, "h2d mb");
 
 /* ---------- host buffers ---------- */
@@ -453,6 +462,8 @@ static void handle_mb_data(u32 data)
     }
 }
 
+static void flowring_delete(void);
+
 /* ---------- events ---------- */
 
 static u16 be16(const u8 *p)
@@ -537,8 +548,10 @@ static void handle_event(const u8 *p, u32 len)
     switch (ev.type) {
         case BRCM_E_LINK:
             link.link = ev.flags & 1;
-            if (!link.link)
+            if (!link.link) {
                 link.keyed = false;
+                flowring_delete(); /* cfg80211.c: brcmf_proto_delete_peer on link down */
+            }
             break;
         case BRCM_E_SET_SSID:
             link.assoc_status = ev.status;
@@ -554,6 +567,7 @@ static void handle_event(const u8 *p, u32 len)
         case BRCM_E_DISASSOC_IND:
             link.link = link.keyed = false;
             link.last_reason = ev.reason;
+            flowring_delete();
             break;
     }
     if (event_cb)
@@ -638,6 +652,8 @@ static void handle_msg(const u8 *item)
             flow_state = f->compl.status ? FLOW_FAILED : FLOW_OPEN;
             printf("wlan: TX flowring %u %s (status %u)\n", f->compl.flow_ring_id,
                    f->compl.status ? "refused" : "open", f->compl.status);
+            if (flow_state == FLOW_OPEN && !link.keyed)
+                flowring_delete(); /* the link went away while it was being created */
             break;
         }
         case MSGBUF_TYPE_D2H_MAILBOX_DATA: {
@@ -654,9 +670,17 @@ static void handle_msg(const u8 *item)
                        (s16)s->compl.status, s->compl.flow_ring_id);
             break;
         }
-        case MSGBUF_TYPE_FLOW_RING_DELETE_CMPLT:
+        case MSGBUF_TYPE_FLOW_RING_DELETE_CMPLT: {
+            const struct msg_d2h_mb *f = (const void *)item;
+            /* the ring is gone: frames still in it never get a TX status */
+            for (u32 i = 0; i < NR_TX; i++)
+                txbufs[i].posted = false;
+            tx_inflight = 0;
             flow_state = FLOW_NONE;
+            printf("wlan: TX flowring %u deleted (status %u)\n", f->compl.flow_ring_id,
+                   f->compl.status);
             break;
+        }
         default: {
             static u32 unknown;
             if (unknown++ < 8)
@@ -807,6 +831,22 @@ static void flowring_create(const u8 *da, const u8 *sa)
     if (h2d_put(&rings[R_CTRL_SUBMIT], &m, sizeof(m))) {
         h2d_kick(&rings[R_CTRL_SUBMIT]);
         flow_state = FLOW_CREATING;
+        flow_t0 = get_ticks();
+    }
+}
+
+/* msgbuf.c brcmf_msgbuf_delete_flowring; recreated by the next brcm_tx after a new join */
+static void flowring_delete(void)
+{
+    if (flow_state != FLOW_OPEN)
+        return;
+    struct msg_flowring_delete m = {0};
+    m.msg.msgtype = MSGBUF_TYPE_FLOW_RING_DELETE;
+    m.flow_ring_id = FLOWRING_IDSTART;
+    if (h2d_put(&rings[R_CTRL_SUBMIT], &m, sizeof(m))) {
+        h2d_kick(&rings[R_CTRL_SUBMIT]);
+        flow_state = FLOW_DELETING;
+        flow_t0 = get_ticks();
     }
 }
 
@@ -814,8 +854,28 @@ int brcm_tx(const u8 *frame, u32 len)
 {
     if (!msgbuf_up || len < 14 || len > DATA_BUF_SIZE || !link.keyed)
         return -1;
-    if (flow_state == FLOW_NONE)
+    /* no room yet: BRCM_TX_BUSY, the caller keeps the frame and tries again (flow control
+       instead of dropping while the flowring is created or the chip drains a burst) */
+    if (flow_state == FLOW_NONE) {
         flowring_create(frame, frame + 6);
+        return BRCM_TX_BUSY;
+    }
+    if (flow_state == FLOW_DELETING) { /* re-keyed before the old ring was gone */
+        if (ticks_to_msecs(get_ticks() - flow_t0) < 1000)
+            return BRCM_TX_BUSY;
+        printf("wlan: TX flowring delete not answered in 1 s; recreating\n");
+        for (u32 i = 0; i < NR_TX; i++)
+            txbufs[i].posted = false;
+        tx_inflight = 0;
+        flowring_create(frame, frame + 6);
+        return BRCM_TX_BUSY;
+    }
+    if (flow_state == FLOW_CREATING) {
+        if (ticks_to_msecs(get_ticks() - flow_t0) < 1000)
+            return BRCM_TX_BUSY;
+        printf("wlan: TX flowring create not answered in 1 s; dropping TX\n");
+        flow_state = FLOW_FAILED;
+    }
     if (flow_state != FLOW_OPEN) {
         link.tx_dropped++;
         return -1;
@@ -829,13 +889,11 @@ int brcm_tx(const u8 *frame, u32 len)
             break;
         }
     }
-    if (!t) {
-        link.tx_dropped++;
-        return -1;
-    }
-    tx_next = id + 1;
+    if (!t)
+        return BRCM_TX_BUSY; /* every TX buffer in flight */
     memcpy(t->va, frame, len);
     dma_sync(t->va, len);
+    tx_next = id + 1;
 
     struct msg_tx_post m = {0};
     m.msg.msgtype = MSGBUF_TYPE_TX_POST;
@@ -845,10 +903,8 @@ int brcm_tx(const u8 *frame, u32 len)
     m.seg_cnt = 1;
     m.data_buf_addr = t->iova + 14;
     m.data_len = len - 14;
-    if (!h2d_put(&flowring, &m, sizeof(m))) {
-        link.tx_dropped++;
-        return -1;
-    }
+    if (!h2d_put(&flowring, &m, sizeof(m)))
+        return BRCM_TX_BUSY; /* flowring full; the buffer stays free */
     t->posted = true;
     tx_inflight++;
     link.tx_frames++;
