@@ -309,6 +309,10 @@ int brcm_dongle_init(const struct brcm_fw_set *fw)
         printf("wlan: infrastructure mode failed\n");
     if (cmd_int_set(C_SET_FAKEFRAG, 1))
         printf("wlan: frameburst failed\n");
+    /* core.c _brcmf_set_multicast_list: Windows' multicast list does not reach m1n1 (no
+       virtio control queue), so the firmware passes all multicast (IPv6 ND, mDNS, LLMNR) */
+    if (brcm_iovar_int_set("allmulti", 1))
+        printf("wlan: allmulti failed\n");
     fw_up = true;
     return 0;
 }
