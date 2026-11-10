@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 
 #include "hv.h"
+#include "hv_battery.h"
 #include "hv_dchid.h"
 #include "hv_mtp.h"
 #include "hv_tick_policy.h"
@@ -1510,6 +1511,7 @@ void hv_tick(struct exc_info *ctx)
     hv_wdt_pet();
     hv_mtp_poll();
     hv_dchid_poll();
+    hv_battery_poll();
     struct hv_diag_sample_v1 diag_sample;
     if (hv_diag_tick(ctx, &diag_sample) && hv_runtime_diag_enabled())
         hv_diag_delivery_offer(&hv_diag_event_delivery, &diag_sample);

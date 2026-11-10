@@ -10,6 +10,7 @@
 #include "gxf.h"
 #include "heapblock.h"
 #include "hv.h"
+#include "hv_battery.h"
 #include "hv_dchid.h"
 #include "hv_diag.h"
 #include "hv_launch_j313.h"
@@ -511,6 +512,10 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_HV_USB_RESET_MODE:
             hv_usb_ordered_reset = request->args[0] != 0;
             printf("HV: guest USB ordered reset %s\n", hv_usb_ordered_reset ? "ON" : "off");
+            reply->retval = 1;
+            break;
+        case P_HV_BATTERY_MODE:
+            hv_battery_set_mode(request->args[0] != 0);
             reply->retval = 1;
             break;
         case P_HV_FB_MIRROR_CONFIG:

@@ -532,3 +532,44 @@ bool dchid_kbd_fn_media(struct dchid_fn_state *st, u8 report[DCHID_KBD_REPORT_LE
     out[4] = cons[1] >> 8;
     return true;
 }
+
+void dchid_batt_regs(const struct dchid_batt_raw *r, u32 seq, u32 regs[DCHID_BATT_NREGS])
+{
+    for (int i = 0; i < DCHID_BATT_NREGS; i++)
+        regs[i] = 0;
+    regs[DCHID_BATT_MAG] = DCHID_BATT_MAGIC;
+    regs[DCHID_BATT_SEQ] = seq;
+
+    u32 fcc = r->ok_fcc && r->fcc ? r->fcc : r->ok_dcap ? r->dcap : 0;
+    u32 dcap = r->ok_dcap && r->dcap ? r->dcap : fcc;
+    if (!r->ok_buic || !fcc)
+        return; /* not present */
+
+    u32 pct = r->buic > 100 ? 100 : r->buic;
+    bool ac = r->ok_chis && r->chis;
+    bool charging = ac && r->ok_cur && r->cur > 0;
+    bool discharging = !charging && (!ac || (r->ok_cur && r->cur < 0));
+    u32 flags = DCHID_BATT_PRESENT;
+
+    if (ac)
+        flags |= DCHID_BATT_AC;
+    if (charging)
+        flags |= DCHID_BATT_CHARGING;
+    if (discharging)
+        flags |= DCHID_BATT_DISCHARGING;
+    if (discharging && pct <= 5)
+        flags |= DCHID_BATT_CRITICAL;
+
+    regs[DCHID_BATT_FLG] = flags;
+    regs[DCHID_BATT_DCAP] = dcap;
+    regs[DCHID_BATT_FCAP] = fcc;
+    regs[DCHID_BATT_RCAP] = pct * fcc / 100;
+    regs[DCHID_BATT_RATE] = r->ok_cur ? (u32)(r->cur < 0 ? -r->cur : r->cur) : 0xffffffff;
+    regs[DCHID_BATT_VOLT] = r->ok_volt ? r->volt : 0xffffffff;
+    regs[DCHID_BATT_CYC] = r->ok_cyc ? r->cyc : 0xffffffff;
+    /* Linux macsmc-power: 3800 mV nominal per cell */
+    regs[DCHID_BATT_DVOLT] = r->ok_cells && r->cells ? 3800u * r->cells
+                             : r->ok_volt               ? r->volt
+                                                        : 11400;
+    regs[DCHID_BATT_PCT] = pct;
+}

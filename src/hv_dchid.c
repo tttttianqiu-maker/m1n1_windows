@@ -14,6 +14,7 @@
 #include "dchid_proto.h"
 #include "hv.h"
 #include "hv_mtp.h"
+#include "hv_battery.h"
 #include "hv_vgic.h"
 #include "keyboard_types.h"
 #include "malloc.h"
@@ -347,6 +348,8 @@ static bool avhd_hook(struct exc_info *ctx, u64 addr, u64 *val, bool write, int 
         v = vq.drops;
     } else if (off == 0x030) {
         v = vendor_id | ((u32)product_id << 16);
+    } else if (off >= DCHID_BATT_BASE && off < DCHID_BATT_BASE + 4 * DCHID_BATT_NREGS) {
+        v = hv_battery_reg(off - DCHID_BATT_BASE);
     } else if (off >= 0x040 && off < 0x050) {
         v = window_word(dims, sizeof(dims), off - 0x040);
         if (off == 0x040)

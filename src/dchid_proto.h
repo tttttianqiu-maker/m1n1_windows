@@ -18,6 +18,7 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 typedef int32_t s32;
+typedef int16_t s16;
 #else
 #include "types.h"
 #endif
@@ -226,6 +227,43 @@ bool dchid_kbd_fn_media(struct dchid_fn_state *st, u8 report[DCHID_KBD_REPORT_LE
  * buttons bit 0 only. Returns 0 (as is), 1 (trimmed) or -1 (unusable).
  */
 int dchid_mt_sanitize(const u8 *in, size_t len, u8 *out, size_t cap, size_t *out_len);
+
+/*
+ * Battery + AC adapter for the ACPI devices BAT0/ADP1 (J613 DSDT), served
+ * from the AVHD page at DCHID_BATT_BASE: one u32 per register. Built from
+ * SMC keys read like Linux macsmc-power (read-only: BUIC %, B0FC/B0DC mAh,
+ * B0AV mV, B0AC mA, B0CT, CHIS AC online, BNCB cells). An m1n1 without
+ * battery support reads 0 there, which hides both devices (BFLG bit 0).
+ */
+#define DCHID_BATT_BASE  0x100
+#define DCHID_BATT_MAGIC 0x54544142 /* "BATT" */
+enum {
+    DCHID_BATT_MAG,  /* +0x00 */
+    DCHID_BATT_FLG,  /* +0x04 bit0 present, 1 AC online, 2 charging, 3 discharging, 4 critical */
+    DCHID_BATT_DCAP, /* +0x08 design capacity, mAh */
+    DCHID_BATT_FCAP, /* +0x0c last full charge capacity, mAh */
+    DCHID_BATT_RCAP, /* +0x10 remaining capacity, mAh */
+    DCHID_BATT_RATE, /* +0x14 present rate, mA (0xffffffff unknown) */
+    DCHID_BATT_VOLT, /* +0x18 present voltage, mV (0xffffffff unknown) */
+    DCHID_BATT_CYC,  /* +0x1c cycle count (0xffffffff unknown) */
+    DCHID_BATT_DVOLT,/* +0x20 design voltage, mV */
+    DCHID_BATT_PCT,  /* +0x24 percent */
+    DCHID_BATT_SEQ,  /* +0x28 refresh counter */
+    DCHID_BATT_NREGS
+};
+#define DCHID_BATT_PRESENT     (1u << 0)
+#define DCHID_BATT_AC          (1u << 1)
+#define DCHID_BATT_CHARGING    (1u << 2)
+#define DCHID_BATT_DISCHARGING (1u << 3)
+#define DCHID_BATT_CRITICAL    (1u << 4)
+struct dchid_batt_raw {
+    bool ok_buic, ok_fcc, ok_dcap, ok_volt, ok_cur, ok_cyc, ok_chis, ok_cells;
+    u8 buic, cells;
+    u16 fcc, dcap, volt, cyc;
+    s16 cur;
+    u32 chis;
+};
+void dchid_batt_regs(const struct dchid_batt_raw *raw, u32 seq, u32 regs[DCHID_BATT_NREGS]);
 
 /*
  * Guest report queue: one ring per interface (0 keyboard, 1 trackpad), the

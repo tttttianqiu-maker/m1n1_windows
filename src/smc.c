@@ -19,6 +19,7 @@
 #define SMC_MSG_ID   GENMASK(15, 12)
 
 #define SMC_WRITE_KEY_SIZE GENMASK(23, 16)
+#define SMC_READ_KEY_SIZE  GENMASK(23, 16)
 #define SMC_WRITE_KEY_KEY  GENMASK(63, 32)
 
 #define SMC_RESULT_RESULT GENMASK(7, 0)
@@ -29,6 +30,9 @@
 #define SMC_NUM_IDS 16
 
 #define SMC_ENDPOINT 0x20
+
+/* Linux macsmc SMC_TIMEOUT_MS: a stuck SMC must not hang the hypervisor tick */
+#define SMC_TIMEOUT_MS 500
 
 struct smc_dev {
     asc_dev_t *asc;
@@ -61,9 +65,14 @@ static int smc_work(smc_dev_t *smc)
 {
     int ret;
     struct rtkit_message msg;
+    u64 start = get_ticks();
 
-    while ((ret = rtkit_recv(smc->rtkit, &msg)) == 0)
-        ;
+    while ((ret = rtkit_recv(smc->rtkit, &msg)) == 0) {
+        if (ticks_to_msecs(get_ticks() - start) > SMC_TIMEOUT_MS) {
+            printf("SMC: no reply within %d ms\n", SMC_TIMEOUT_MS);
+            return -1;
+        }
+    }
 
     if (ret < 0) {
         printf("SMC: rtkit_recv failed!\n");
@@ -90,19 +99,28 @@ static void smc_send(smc_dev_t *smc, u64 message)
     rtkit_send(smc->rtkit, &msg);
 }
 
-static int smc_cmd(smc_dev_t *smc, u64 message)
+static int smc_cmd_result(smc_dev_t *smc, u64 message, u64 *result_out)
 {
     u8 id = smc->msgid++ & 0xF;
-    assert(!smc->outstanding[id]);
+    if (smc->outstanding[id]) {
+        printf("SMC: message id %u still outstanding\n", id);
+        return -1;
+    }
     smc->outstanding[id] = true;
 
     message |= FIELD_PREP(SMC_MSG_ID, id);
 
     smc_send(smc, message);
-    while (smc->outstanding[id])
-        smc_work(smc);
+    while (smc->outstanding[id]) {
+        if (smc_work(smc) < 0) {
+            smc->outstanding[id] = false;
+            return -1;
+        }
+    }
 
     u64 result = smc->ret[id];
+    if (result_out)
+        *result_out = result;
     u32 ret = FIELD_GET(SMC_RESULT_RESULT, result);
     if (ret) {
         printf("SMC: smc_cmd[0x%x] failed: %u\n", id, ret);
@@ -110,6 +128,11 @@ static int smc_cmd(smc_dev_t *smc, u64 message)
     }
 
     return 0;
+}
+
+static int smc_cmd(smc_dev_t *smc, u64 message)
+{
+    return smc_cmd_result(smc, message, NULL);
 }
 
 void smc_shutdown(smc_dev_t *smc)
@@ -178,4 +201,23 @@ int smc_write_u32(smc_dev_t *smc, u32 key, u32 value)
     msg |= FIELD_PREP(SMC_WRITE_KEY_KEY, key);
 
     return smc_cmd(smc, msg);
+}
+
+int smc_read(smc_dev_t *smc, u32 key, void *buf, u32 size)
+{
+    u64 result;
+
+    if (!smc || !buf || !size || size > 4)
+        return -1;
+    u64 msg = FIELD_PREP(SMC_MSG_TYPE, SMC_READ_KEY);
+    msg |= FIELD_PREP(SMC_READ_KEY_SIZE, size);
+    msg |= FIELD_PREP(SMC_WRITE_KEY_KEY, key);
+
+    int ret = smc_cmd_result(smc, msg, &result);
+    if (ret)
+        return ret;
+    /* Up to 4 bytes come back inline in the reply (Linux apple_smc_rw_locked) */
+    u32 value = FIELD_GET(SMC_RESULT_VALUE, result);
+    memcpy(buf, &value, size);
+    return 0;
 }

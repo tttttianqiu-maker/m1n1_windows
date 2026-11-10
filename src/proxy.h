@@ -160,6 +160,7 @@ typedef enum {
     P_HV_MTP_FIRMWARE = 0xc1f,
     P_HV_FB_MIRROR_CONFIG = 0xc20,
     P_HV_USB_RESET_MODE = 0xc21,
+    P_HV_BATTERY_MODE = 0xc22,
 
     P_FB_INIT = 0xd00,
     P_FB_SHUTDOWN,
