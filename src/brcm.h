@@ -26,6 +26,7 @@ struct brcm_fw_set {
     u64 cal, cal_len;     /* ADT /arm-io/wlan wifi-calibration-msf ("calload"), optional */
     u64 mac;              /* ADT /chosen mac-address-wifi0 in the low 6 bytes, or 0 */
 };
+_Static_assert(sizeof(struct brcm_fw_set) == 14 * 8, "tools/j613/wifi_net.py FW_SET_FIELDS");
 
 struct brcm_otp {
     char module[16], vendor[16], version[16];

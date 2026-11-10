@@ -44,6 +44,7 @@ struct wlan_net {
     char pass[64];
 };
 #define WLAN_NET_MAGIC 0x54454e57 /* "WNET" */
+_Static_assert(sizeof(struct wlan_net) == 140, "tools/j613/wifi_net.py WLAN_NET_FMT");
 
 /*
  * Probe: PCIe link up, enumerate 01:00.0, chip id, then the Broadcom core scan, reset,
